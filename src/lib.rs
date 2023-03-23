@@ -333,62 +333,45 @@ impl Merger {
 
         for (key, value) in flattened {
             // The pointer to unflattened data that corresponds to the current path.
-            let mut pointer = String::new();
+            let mut pointer = &mut unflattened;
 
             // For each sub-path in the key.
-            for (index, part) in key.iter().enumerate() {
-                pointer.push_str(&match part {
+            for (position, part) in key.iter().enumerate() {
+                match part {
                     // The sub-path is to an item of an array.
                     Part::Identifier { original, .. } => {
-                        let token = indices.entry(&key[..=index]).or_insert_with(|| {
-                            let array = unflattened
-                                .pointer_mut(&pointer)
-                                .unwrap_or_else(|| panic!("{pointer:?} should be set"))
-                                .as_array_mut()
-                                .unwrap_or_else(|| panic!("{pointer:?} should be an array"));
-
+                        let index = indices.entry(&key[..=position]).or_insert_with(|| {
                             let mut object = json!({});
+                            // If the original object had an `id` value, set it.
                             if let Some(id) = original {
-                                // If the original object had an `id` value, set it.
                                 object["id"] = id.clone();
                             }
+                            let array = pointer.as_array_mut().expect("Value should be an array");
                             array.push(object);
-
                             array.len() - 1
                         });
-
-                        format!("/{token}")
+                        pointer = &mut pointer[index.to_owned()];
                     }
                     // The sub-path is to a property of an object.
                     Part::Field(field) => {
-                        let object = unflattened
-                            .pointer_mut(&pointer)
-                            .unwrap_or_else(|| panic!("{pointer:?} should be set"))
-                            .as_object_mut()
-                            .unwrap_or_else(|| panic!("{pointer:?} should be an object"));
-
-                        // If the sub-path is to a visited node, pass.
-                        if !object.contains_key(field) {
-                            // If this is not a leaf node, it is an array or object.
-                            if index + 1 < key.len() {
-                                // Peek at the next node, and instantiate the array or object.
-                                object.insert(
-                                    field.clone(),
-                                    match key.get(index + 1) {
-                                        Some(Part::Identifier { .. }) => json!([]),
-                                        Some(Part::Field(_)) => json!({}),
-                                        None => unreachable!("Index is out of bounds"),
-                                    },
-                                );
-                            // If this is a leaf node, copy the value unless it is null.
-                            } else if !value.is_null() {
-                                object.insert(field.clone(), value.clone());
-                            }
+                        // If this is a visited node, change into it.
+                        if pointer.get(field).is_some() {
+                            pointer = &mut pointer[field];
+                        // If this is not a leaf node, it is an array or object.
+                        } else if position + 1 < key.len() {
+                            // Peek at the next node to instantiate it, then change into it.
+                            pointer[field] = match key.get(position + 1) {
+                                Some(Part::Identifier { .. }) => json!([]),
+                                Some(Part::Field(_)) => json!({}),
+                                None => unreachable!("Index is out of bounds"),
+                            };
+                            pointer = &mut pointer[field];
+                        // If this is a leaf node, copy the value unless it is null.
+                        } else if !value.is_null() {
+                            pointer[field] = value.clone();
                         }
-
-                        format!("/{field}")
                     }
-                });
+                }
             }
         }
 

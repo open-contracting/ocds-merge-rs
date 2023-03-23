@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use derivative::Derivative;
-use human_panic::setup_panic;
 use indexmap::IndexMap;
-use fastrand;
 use log::warn;
 use serde_json::{json, Value};
 
@@ -61,7 +59,8 @@ struct Merger {
 }
 
 impl Merger {
-    fn create_compiled_release(&mut self, releases: &[Value]) -> Value {
+    /// Merge the sorted releases into a compiled release.
+    pub fn create_compiled_release(&mut self, releases: &[Value]) -> Value {
         let mut flattened = IndexMap::new();
 
         for release in releases {
@@ -84,7 +83,12 @@ impl Merger {
         Self::unflatten(&flattened)
     }
 
-    fn create_versioned_release(&mut self, releases: &mut [Value]) -> Value {
+    /// Merge the sorted releases into a versioned release.
+    ///
+    /// # Note
+    ///
+    /// The ``"tag"`` field of each release is removed.
+    pub fn create_versioned_release(&mut self, releases: &mut [Value]) -> Value {
         let mut flattened = IndexMap::new();
 
         for release in releases {
@@ -122,7 +126,8 @@ impl Merger {
         Self::unflatten(&flattened)
     }
 
-    fn get_rules(value: &Value, path: &[String]) -> HashMap<Vec<String>, Rule> {
+    /// Calculate the merge rules from a JSON Schema.
+    pub fn get_rules(value: &Value, path: &[String]) -> HashMap<Vec<String>, Rule> {
         let mut rules = HashMap::new();
 
         if let Value::Object(properties) = value {
@@ -173,7 +178,8 @@ impl Merger {
         }
     }
 
-    fn dereference(value: &mut Value) {
+    /// Dereference all ``$ref`` properties to local definitions.
+    pub fn dereference(value: &mut Value) {
         fn f(value: &mut Value, schema: &Value, visited: &Vec<String>) {
             if let Value::Object(object) = value {
                 if let Some(Value::String(reference)) = object.remove("$ref") {
@@ -191,7 +197,7 @@ impl Merger {
             // The if-statement is repeated, because `value` could be replaced with a non-object.
             if let Value::Object(object) = value {
                 for v in object.values_mut() {
-                    f(v, schema, &visited);
+                    f(v, schema, visited);
                 }
             }
         }
@@ -426,7 +432,7 @@ mod tests {
     }
 
     fn read(path: &str) -> Value {
-        let file = File::open(path).unwrap();
+        let file = File::open(path).expect(format!("{path} does not exist").as_str());
         let mut reader = BufReader::new(file);
         let mut contents = String::new();
         reader.read_to_string(&mut contents).unwrap();
@@ -486,10 +492,16 @@ mod tests {
         let values = flattened.values().collect::<Vec<_>>();
         let keys = flattened.keys().cloned().collect::<Vec<_>>();
 
-        assert_eq!(flattened, IndexMap::from([
-            (vec![field!("a"), s!("identifier"), field!("id")], json!("identifier")),
-            (vec![field!("a"), i!(-8433386414344686362), field!("key")], json!("value")),
-        ]));
+        assert_eq!(
+            flattened,
+            IndexMap::from([
+                (vec![field!("a"), s!("identifier"), field!("id")], json!("identifier")),
+                (
+                    vec![field!("a"), i!(-8433386414344686362), field!("key")],
+                    json!("value")
+                ),
+            ])
+        );
 
         assert_eq!(Merger::unflatten(&flattened), item);
     }
@@ -501,12 +513,12 @@ mod tests {
 
     #[test]
     fn rules_1_1() {
-        let mut value = read("tests/fixtures/release-schema-1__1__4.json");
+        let mut schema = read("tests/fixtures/release-schema-1__1__4.json");
 
-        Merger::dereference(&mut value);
+        Merger::dereference(&mut schema);
 
         assert_eq!(
-            Merger::get_rules(&value["properties"], &[]),
+            Merger::get_rules(&schema["properties"], &[]),
             HashMap::from([
                 (v!["awards", "items", "additionalClassifications"], Rule::Replace),
                 (v!["contracts", "items", "additionalClassifications"], Rule::Replace),
@@ -557,12 +569,12 @@ mod tests {
 
     #[test]
     fn rules_1_0() {
-        let mut value = read("tests/fixtures/release-schema-1__0__3.json");
+        let mut schema = read("tests/fixtures/release-schema-1__0__3.json");
 
-        Merger::dereference(&mut value);
+        Merger::dereference(&mut schema);
 
         assert_eq!(
-            Merger::get_rules(&value["properties"], &[]),
+            Merger::get_rules(&schema["properties"], &[]),
             HashMap::from([
                 (v!["awards", "amendment", "changes"], Rule::Replace),
                 (v!["awards", "items", "additionalClassifications"], Rule::Replace),
@@ -583,108 +595,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn merge_compiled() {
-        let mut value = read("tests/fixtures/release-schema-1__1__4.json");
+    fn merge(suffix: &str, path: &str, schema: &str) {
+        let mut schema = read(&format!("tests/fixtures/{schema}.json"));
 
-        Merger::dereference(&mut value);
+        Merger::dereference(&mut schema);
 
         let mut merger = Merger {
-            rules: Merger::get_rules(&value["properties"], &[]),
+            rules: Merger::get_rules(&schema["properties"], &[]),
             ..Default::default()
         };
 
-        let mut releases = [
-            json!({
-              "ocid": "ocds-213czf-A",
-              "id": "1",
-              "date": "2014-01-01T00:00:00Z",
-              "tag": [
-                "tender"
-              ],
-              "initiationType": "tender",
-              "tender": {
-                "id": "A",
-                "procurementMethod": "selective"
-              }
-            }),
-            json!({
-              "ocid": "ocds-213czf-A",
-              "id": "2",
-              "date": "2014-01-02T00:00:00Z",
-              "tag": [
-                "tender"
-              ],
-              "initiationType": "tender",
-              "tender": {
-                "id": "A",
-                "procurementMethod": "open"
-              }
-            }),
-        ];
+        let mut fixture = read(&format!("{}.json", path.rsplit_once('-').unwrap().0));
 
-        assert_eq!(
-            merger.create_compiled_release(&releases),
-            json!({
-              "tag": [
-                "compiled"
-              ],
-              "id": "ocds-213czf-A-2014-01-02T00:00:00Z",
-              "date": "2014-01-02T00:00:00Z",
-              "ocid": "ocds-213czf-A",
-              "initiationType": "tender",
-              "tender": {
-                "id": "A",
-                "procurementMethod": "open"
-              }
-            })
-        );
+        let actual = match suffix {
+            "compiled" => merger.create_compiled_release(&fixture.as_array().unwrap()),
+            "versioned" => merger.create_versioned_release(&mut fixture.as_array_mut().unwrap()),
+            _ => unreachable!(),
+        };
 
-        assert_eq!(
-            merger.create_versioned_release(&mut releases),
-            json!({
-              "ocid": "ocds-213czf-A",
-              "initiationType": [
-                {
-                  "releaseID": "1",
-                  "releaseDate": "2014-01-01T00:00:00Z",
-                  "releaseTag": [
-                    "tender"
-                  ],
-                  "value": "tender"
-                }
-              ],
-              "tender": {
-                "id": [
-                  {
-                    "releaseID": "1",
-                    "releaseDate": "2014-01-01T00:00:00Z",
-                    "releaseTag": [
-                      "tender"
-                    ],
-                    "value": "A"
-                  }
-                ],
-                "procurementMethod": [
-                  {
-                    "releaseID": "1",
-                    "releaseDate": "2014-01-01T00:00:00Z",
-                    "releaseTag": [
-                      "tender"
-                    ],
-                    "value": "selective"
-                  },
-                  {
-                    "releaseID": "2",
-                    "releaseDate": "2014-01-02T00:00:00Z",
-                    "releaseTag": [
-                      "tender"
-                    ],
-                    "value": "open"
-                  }
-                ]
-              }
-            })
-        );
+        assert_eq!(actual, read(path));
     }
+
+    include!(concat!(env!("OUT_DIR"), "/lib.include"));
 }

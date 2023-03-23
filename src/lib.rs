@@ -4,7 +4,6 @@ use derivative::Derivative;
 use indexmap::IndexMap;
 use log::warn;
 use serde_json::{json, Value};
-use std::mem;
 use uuid::Uuid;
 
 macro_rules! join {
@@ -128,7 +127,7 @@ impl Merger {
         if let Value::Object(properties) = value {
             for (property, subschema) in properties {
                 let new_path = join!(path, property);
-                let types = Self::get_types(&subschema);
+                let types = Self::get_types(subschema);
 
                 // `omitWhenMerged` supersedes all other rules.
                 // See https://standard.open-contracting.org/1.1/en/schema/merging/#discarded-fields
@@ -177,7 +176,7 @@ impl Merger {
         if let Value::Object(object) = value {
             if let Some(Value::String(reference)) = object.remove("$ref") {
                 if let Some(target) = schema.pointer(&reference[1..]) {
-                    mem::replace(value, target.clone());
+                    *value = target.clone();
                 }
             }
         }
@@ -420,7 +419,7 @@ mod tests {
         let file = File::open("tests/fixtures/release-schema-1__1__4.json").unwrap();
         let mut reader = BufReader::new(file);
         let mut contents = String::new();
-        reader.read_to_string(&mut contents);
+        reader.read_to_string(&mut contents).unwrap();
         let mut value: Value = serde_json::from_str(&contents).unwrap();
 
         Merger::dereference(&value.clone(), &mut value);
@@ -598,7 +597,7 @@ mod tests {
         let file = File::open("tests/fixtures/release-schema-1__1__4.json").unwrap();
         let mut reader = BufReader::new(file);
         let mut contents = String::new();
-        reader.read_to_string(&mut contents);
+        reader.read_to_string(&mut contents).unwrap();
         let mut value: Value = serde_json::from_str(&contents).unwrap();
 
         Merger::dereference(&value.clone(), &mut value);
@@ -658,7 +657,7 @@ mod tests {
         let file = File::open("tests/fixtures/release-schema-1__0__3.json").unwrap();
         let mut reader = BufReader::new(file);
         let mut contents = String::new();
-        reader.read_to_string(&mut contents);
+        reader.read_to_string(&mut contents).unwrap();
         let mut value: Value = serde_json::from_str(&contents).unwrap();
 
         Merger::dereference(&value.clone(), &mut value);

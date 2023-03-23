@@ -173,11 +173,16 @@ impl Merger {
     }
 
     fn dereference(value: &mut Value) {
-        fn f(schema: &Value, value: &mut Value) {
+        fn f(value: &mut Value, schema: &Value, visited: &Vec<String>) {
             if let Value::Object(object) = value {
                 if let Some(Value::String(reference)) = object.remove("$ref") {
-                    if let Some(target) = schema.pointer(&reference[1..]) {
-                        *value = target.clone();
+                    if visited.contains(&reference) {
+                        // If we already visited this $ref in this $ref chain, stop.
+                        return;
+                    }
+                    if let Some(mut target) = schema.pointer(&reference[1..]).cloned() {
+                        f(&mut target, schema, &join!(visited, &reference));
+                        *value = target;
                     }
                 }
             }
@@ -185,12 +190,12 @@ impl Merger {
             // The if-statement is repeated, because `value` could be replaced with a non-object.
             if let Value::Object(object) = value {
                 for v in object.values_mut() {
-                    f(schema, v);
+                    f(v, schema, &visited);
                 }
             }
         }
 
-        f(&value.clone(), value);
+        f(value, &value.clone(), &vec![]);
     }
 
     fn flatten(
@@ -686,5 +691,14 @@ mod tests {
                 (v!["tender", "tenderers"], Rule::Replace),
             ])
         );
+    }
+
+    #[test]
+    fn dereference_cyclic_dependency() {
+        let mut schema = json!(
+            {"properties": {"cycle": {"$ref": "#"}}}
+        );
+
+        Merger::dereference(&mut schema);
     }
 }

@@ -172,21 +172,25 @@ impl Merger {
         }
     }
 
-    fn dereference(schema: &Value, value: &mut Value) {
-        if let Value::Object(object) = value {
-            if let Some(Value::String(reference)) = object.remove("$ref") {
-                if let Some(target) = schema.pointer(&reference[1..]) {
-                    *value = target.clone();
+    fn dereference(value: &mut Value) {
+        fn f(schema: &Value, value: &mut Value) {
+            if let Value::Object(object) = value {
+                if let Some(Value::String(reference)) = object.remove("$ref") {
+                    if let Some(target) = schema.pointer(&reference[1..]) {
+                        *value = target.clone();
+                    }
+                }
+            }
+
+            // The if-statement is repeated, because `value` could be replaced with a non-object.
+            if let Value::Object(object) = value {
+                for v in object.values_mut() {
+                    f(schema, v);
                 }
             }
         }
 
-        // The if-statement is repeated, because `value` could be replaced with a non-object.
-        if let Value::Object(object) = value {
-            for v in object.values_mut() {
-                Self::dereference(schema, v);
-            }
-        }
+        f(&value.clone(), value);
     }
 
     fn flatten(
@@ -422,7 +426,7 @@ mod tests {
         reader.read_to_string(&mut contents).unwrap();
         let mut value: Value = serde_json::from_str(&contents).unwrap();
 
-        Merger::dereference(&value.clone(), &mut value);
+        Merger::dereference(&mut value);
 
         let mut merger = Merger {
             rules: Merger::get_rules(&value["properties"], &[]),
@@ -600,7 +604,7 @@ mod tests {
         reader.read_to_string(&mut contents).unwrap();
         let mut value: Value = serde_json::from_str(&contents).unwrap();
 
-        Merger::dereference(&value.clone(), &mut value);
+        Merger::dereference(&mut value);
 
         assert_eq!(
             Merger::get_rules(&value["properties"], &[]),
@@ -660,7 +664,7 @@ mod tests {
         reader.read_to_string(&mut contents).unwrap();
         let mut value: Value = serde_json::from_str(&contents).unwrap();
 
-        Merger::dereference(&value.clone(), &mut value);
+        Merger::dereference(&mut value);
 
         assert_eq!(
             Merger::get_rules(&value["properties"], &[]),

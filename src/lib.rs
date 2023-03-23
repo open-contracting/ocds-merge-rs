@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
 use derivative::Derivative;
+use human_panic::setup_panic;
 use indexmap::IndexMap;
+use fastrand;
 use log::warn;
 use serde_json::{json, Value};
-use uuid::Uuid;
 
 macro_rules! join {
     ( $vec:expr , $item:expr ) => {
@@ -227,7 +228,7 @@ impl Merger {
                             )
                         // If the object has no `id` field, set a default unique value.
                         } else {
-                            (None, Id::String(Uuid::now_v1(&[0, 0, 0, 0, 0, 0]).to_string()))
+                            (None, Id::Integer(fastrand::i64(..)))
                         };
 
                         // Calculate the key for checking for collisions using the identifier merge strategy.
@@ -238,7 +239,7 @@ impl Merger {
 
                         let key = match self.overrides.get(rule_path) {
                             Some(Strategy::Append) => Part::Identifier {
-                                id: Id::String(Uuid::now_v1(&[0, 0, 0, 0, 0, 0]).to_string()),
+                                id: Id::Integer(fastrand::i64(..)),
                                 original: original.cloned(),
                             },
                             Some(Strategy::MergeByPosition) => Part::Identifier {
@@ -397,6 +398,7 @@ mod tests {
     use std::io::BufReader;
     use std::io::Read;
 
+    use pretty_assertions::assert_eq;
     use serde_json::json;
 
     macro_rules! i {
@@ -423,13 +425,167 @@ mod tests {
         };
     }
 
-    #[test]
-    fn merge() {
-        let file = File::open("tests/fixtures/release-schema-1__1__4.json").unwrap();
+    fn read(path: &str) -> Value {
+        let file = File::open(path).unwrap();
         let mut reader = BufReader::new(file);
         let mut contents = String::new();
         reader.read_to_string(&mut contents).unwrap();
-        let mut value: Value = serde_json::from_str(&contents).unwrap();
+        serde_json::from_str(&contents).unwrap()
+    }
+
+    #[test]
+    fn flatten_1() {
+        let mut merger = Merger::default();
+
+        let mut flattened = IndexMap::new();
+
+        let item = json!({
+            "c": "I am a",
+            "b": ["A", "list"],
+            "a": [
+                {"id": 1, "cb": "I am ca"},
+                {"id": 2, "ca": "I am cb"}
+            ]
+        });
+
+        merger.flatten(&mut flattened, &[], &mut vec![], false, &item);
+
+        assert_eq!(
+            flattened,
+            IndexMap::from([
+                (vec![field!("c")], json!("I am a")),
+                (vec![field!("b")], json!(["A", "list"])),
+                (vec![field!("a"), i!(1), field!("cb")], json!("I am ca")),
+                (vec![field!("a"), i!(1), field!("id")], json!(1)),
+                (vec![field!("a"), i!(2), field!("ca")], json!("I am cb")),
+                (vec![field!("a"), i!(2), field!("id")], json!(2)),
+            ])
+        );
+
+        assert_eq!(Merger::unflatten(&flattened), item);
+    }
+
+    #[test]
+    fn flatten_2() {
+        // OCDS in decimal.
+        fastrand::seed(79_67_68_83);
+
+        let mut merger = Merger::default();
+
+        let mut flattened = IndexMap::new();
+
+        let item = json!({
+            "a": [
+                {"id": "identifier"},
+                {"key": "value"}
+            ]
+        });
+
+        merger.flatten(&mut flattened, &[], &mut vec![], false, &item);
+
+        let values = flattened.values().collect::<Vec<_>>();
+        let keys = flattened.keys().cloned().collect::<Vec<_>>();
+
+        assert_eq!(flattened, IndexMap::from([
+            (vec![field!("a"), s!("identifier"), field!("id")], json!("identifier")),
+            (vec![field!("a"), i!(-8433386414344686362), field!("key")], json!("value")),
+        ]));
+
+        assert_eq!(Merger::unflatten(&flattened), item);
+    }
+
+    #[test]
+    fn dereference_cyclic_dependency() {
+        Merger::dereference(&mut json!({"$ref": "#"}));
+    }
+
+    #[test]
+    fn rules_1_1() {
+        let mut value = read("tests/fixtures/release-schema-1__1__4.json");
+
+        Merger::dereference(&mut value);
+
+        assert_eq!(
+            Merger::get_rules(&value["properties"], &[]),
+            HashMap::from([
+                (v!["awards", "items", "additionalClassifications"], Rule::Replace),
+                (v!["contracts", "items", "additionalClassifications"], Rule::Replace),
+                (v!["contracts", "relatedProcesses", "relationship"], Rule::Replace),
+                (v!["date"], Rule::Omit),
+                (v!["id"], Rule::Omit),
+                (v!["parties", "additionalIdentifiers"], Rule::Replace),
+                (v!["parties", "roles"], Rule::Replace),
+                (v!["relatedProcesses", "relationship"], Rule::Replace),
+                (v!["tag"], Rule::Omit),
+                (v!["tender", "additionalProcurementCategories"], Rule::Replace),
+                (v!["tender", "items", "additionalClassifications"], Rule::Replace),
+                (v!["tender", "submissionMethod"], Rule::Replace),
+                // Deprecated
+                (v!["awards", "amendment", "changes"], Rule::Replace),
+                (v!["awards", "amendments", "changes"], Rule::Replace),
+                (v!["awards", "suppliers", "additionalIdentifiers"], Rule::Replace),
+                (v!["buyer", "additionalIdentifiers"], Rule::Replace),
+                (v!["contracts", "amendment", "changes"], Rule::Replace),
+                (v!["contracts", "amendments", "changes"], Rule::Replace),
+                (
+                    v![
+                        "contracts",
+                        "implementation",
+                        "transactions",
+                        "payee",
+                        "additionalIdentifiers"
+                    ],
+                    Rule::Replace
+                ),
+                (
+                    v![
+                        "contracts",
+                        "implementation",
+                        "transactions",
+                        "payer",
+                        "additionalIdentifiers"
+                    ],
+                    Rule::Replace
+                ),
+                (v!["tender", "amendment", "changes"], Rule::Replace),
+                (v!["tender", "amendments", "changes"], Rule::Replace),
+                (v!["tender", "procuringEntity", "additionalIdentifiers"], Rule::Replace),
+                (v!["tender", "tenderers", "additionalIdentifiers"], Rule::Replace),
+            ])
+        );
+    }
+
+    #[test]
+    fn rules_1_0() {
+        let mut value = read("tests/fixtures/release-schema-1__0__3.json");
+
+        Merger::dereference(&mut value);
+
+        assert_eq!(
+            Merger::get_rules(&value["properties"], &[]),
+            HashMap::from([
+                (v!["awards", "amendment", "changes"], Rule::Replace),
+                (v!["awards", "items", "additionalClassifications"], Rule::Replace),
+                (v!["awards", "suppliers"], Rule::Replace),
+                (v!["buyer", "additionalIdentifiers"], Rule::Replace),
+                (v!["contracts", "amendment", "changes"], Rule::Replace),
+                (v!["contracts", "items", "additionalClassifications"], Rule::Replace),
+                (v!["date"], Rule::Omit),
+                (v!["id"], Rule::Omit),
+                (v!["ocid"], Rule::Omit),
+                (v!["tag"], Rule::Omit),
+                (v!["tender", "amendment", "changes"], Rule::Replace),
+                (v!["tender", "items", "additionalClassifications"], Rule::Replace),
+                (v!["tender", "procuringEntity", "additionalIdentifiers"], Rule::Replace),
+                (v!["tender", "submissionMethod"], Rule::Replace),
+                (v!["tender", "tenderers"], Rule::Replace),
+            ])
+        );
+    }
+
+    #[test]
+    fn merge_compiled() {
+        let mut value = read("tests/fixtures/release-schema-1__1__4.json");
 
         Merger::dereference(&mut value);
 
@@ -530,175 +686,5 @@ mod tests {
               }
             })
         );
-    }
-
-    #[test]
-    fn flatten_1() {
-        let mut merger = Merger::default();
-
-        let mut flattened = IndexMap::new();
-
-        let item = json!({
-            "c": "I am a",
-            "b": ["A", "list"],
-            "a": [
-                {"id": 1, "cb": "I am ca"},
-                {"id": 2, "ca": "I am cb"}
-            ]
-        });
-
-        merger.flatten(&mut flattened, &[], &mut vec![], false, &item);
-
-        assert_eq!(
-            flattened,
-            IndexMap::from([
-                (vec![field!("c")], json!("I am a")),
-                (vec![field!("b")], json!(["A", "list"])),
-                (vec![field!("a"), i!(1), field!("cb")], json!("I am ca")),
-                (vec![field!("a"), i!(1), field!("id")], json!(1)),
-                (vec![field!("a"), i!(2), field!("ca")], json!("I am cb")),
-                (vec![field!("a"), i!(2), field!("id")], json!(2)),
-            ])
-        );
-
-        assert_eq!(Merger::unflatten(&flattened), item);
-    }
-
-    #[test]
-    fn flatten_2() {
-        let mut merger = Merger::default();
-
-        let mut flattened = IndexMap::new();
-
-        let item = json!({
-            "a": [
-                {"id": "identifier"},
-                {"key": "value"}
-            ]
-        });
-
-        merger.flatten(&mut flattened, &[], &mut vec![], false, &item);
-
-        let values = flattened.values().collect::<Vec<_>>();
-        let keys = flattened.keys().cloned().collect::<Vec<_>>();
-
-        assert_eq!(flattened.len(), 2);
-        assert_eq!(values, ["identifier", "value"]);
-        // First path has no UUID.
-        assert_eq!(keys[0], vec![field!("a"), s!("identifier"), field!("id")]);
-        // Second path has a UUID.
-        assert_eq!(keys[1].len(), 3);
-        assert_eq!(keys[1][0], field!("a"));
-        assert_eq!(keys[1][2], field!("key"));
-        match &keys[1][1] {
-            Part::Identifier {
-                id: Id::String(s),
-                original: None,
-            } => assert_eq!(s.len(), 36),
-            _ => unreachable!(),
-        };
-
-        assert_eq!(Merger::unflatten(&flattened), item);
-    }
-
-    #[test]
-    fn rules_1_1() {
-        let file = File::open("tests/fixtures/release-schema-1__1__4.json").unwrap();
-        let mut reader = BufReader::new(file);
-        let mut contents = String::new();
-        reader.read_to_string(&mut contents).unwrap();
-        let mut value: Value = serde_json::from_str(&contents).unwrap();
-
-        Merger::dereference(&mut value);
-
-        assert_eq!(
-            Merger::get_rules(&value["properties"], &[]),
-            HashMap::from([
-                (v!["awards", "items", "additionalClassifications"], Rule::Replace),
-                (v!["contracts", "items", "additionalClassifications"], Rule::Replace),
-                (v!["contracts", "relatedProcesses", "relationship"], Rule::Replace),
-                (v!["date"], Rule::Omit),
-                (v!["id"], Rule::Omit),
-                (v!["parties", "additionalIdentifiers"], Rule::Replace),
-                (v!["parties", "roles"], Rule::Replace),
-                (v!["relatedProcesses", "relationship"], Rule::Replace),
-                (v!["tag"], Rule::Omit),
-                (v!["tender", "additionalProcurementCategories"], Rule::Replace),
-                (v!["tender", "items", "additionalClassifications"], Rule::Replace),
-                (v!["tender", "submissionMethod"], Rule::Replace),
-                // Deprecated
-                (v!["awards", "amendment", "changes"], Rule::Replace),
-                (v!["awards", "amendments", "changes"], Rule::Replace),
-                (v!["awards", "suppliers", "additionalIdentifiers"], Rule::Replace),
-                (v!["buyer", "additionalIdentifiers"], Rule::Replace),
-                (v!["contracts", "amendment", "changes"], Rule::Replace),
-                (v!["contracts", "amendments", "changes"], Rule::Replace),
-                (
-                    v![
-                        "contracts",
-                        "implementation",
-                        "transactions",
-                        "payee",
-                        "additionalIdentifiers"
-                    ],
-                    Rule::Replace
-                ),
-                (
-                    v![
-                        "contracts",
-                        "implementation",
-                        "transactions",
-                        "payer",
-                        "additionalIdentifiers"
-                    ],
-                    Rule::Replace
-                ),
-                (v!["tender", "amendment", "changes"], Rule::Replace),
-                (v!["tender", "amendments", "changes"], Rule::Replace),
-                (v!["tender", "procuringEntity", "additionalIdentifiers"], Rule::Replace),
-                (v!["tender", "tenderers", "additionalIdentifiers"], Rule::Replace),
-            ])
-        );
-    }
-
-    #[test]
-    fn rules_1_0() {
-        let file = File::open("tests/fixtures/release-schema-1__0__3.json").unwrap();
-        let mut reader = BufReader::new(file);
-        let mut contents = String::new();
-        reader.read_to_string(&mut contents).unwrap();
-        let mut value: Value = serde_json::from_str(&contents).unwrap();
-
-        Merger::dereference(&mut value);
-
-        assert_eq!(
-            Merger::get_rules(&value["properties"], &[]),
-            HashMap::from([
-                (v!["awards", "amendment", "changes"], Rule::Replace),
-                (v!["awards", "items", "additionalClassifications"], Rule::Replace),
-                (v!["awards", "suppliers"], Rule::Replace),
-                (v!["buyer", "additionalIdentifiers"], Rule::Replace),
-                (v!["contracts", "amendment", "changes"], Rule::Replace),
-                (v!["contracts", "items", "additionalClassifications"], Rule::Replace),
-                (v!["date"], Rule::Omit),
-                (v!["id"], Rule::Omit),
-                (v!["ocid"], Rule::Omit),
-                (v!["tag"], Rule::Omit),
-                (v!["tender", "amendment", "changes"], Rule::Replace),
-                (v!["tender", "items", "additionalClassifications"], Rule::Replace),
-                (v!["tender", "procuringEntity", "additionalIdentifiers"], Rule::Replace),
-                (v!["tender", "submissionMethod"], Rule::Replace),
-                (v!["tender", "tenderers"], Rule::Replace),
-            ])
-        );
-    }
-
-    #[test]
-    fn dereference_cyclic_dependency() {
-        let mut schema = json!(
-            {"properties": {"cycle": {"$ref": "#"}}}
-        );
-
-        Merger::dereference(&mut schema);
     }
 }

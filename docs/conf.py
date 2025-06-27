@@ -33,3 +33,7 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = "furo"
 html_static_path = []
+
+# -- Extension configuration -------------------------------------------------
+
+myst_enable_extensions = ["colon_fence"]

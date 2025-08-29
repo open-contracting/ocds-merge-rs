@@ -7,7 +7,7 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # cargo udeps uses `-Z binary-dep-depinfo`
       # "the option `Z` is only accepted on the nightly compiler"
       - uses: dtolnay/rust-toolchain@nightly
@@ -18,6 +18,9 @@ jobs:
           key: ${{ matrix.os }}
       - id: changed-files
         uses: tj-actions/changed-files@2f7c5bfce28377bc069a65ba478de0a74aa0ca32 # v46.0.1
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+        with:
+          extra_args: cargo-fmt --files ${{ steps.changed-files.outputs.all_changed_files }}
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
         with:
           extra_args: cargo-check --files ${{ steps.changed-files.outputs.all_changed_files }}

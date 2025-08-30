@@ -530,7 +530,7 @@ impl Merger {
                                 original: original.cloned(),
                             },
                             Some(Strategy::MergeByPosition) => Part::Identifier {
-                                id: Id::Integer(index as i64),
+                                id: Id::Integer(index.try_into().unwrap()), // panics if array too long
                                 original: original.cloned(),
                             },
                             None => default_key.clone(),

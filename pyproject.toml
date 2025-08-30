@@ -27,6 +27,11 @@ test = [
     "pytest",
 ]
 
+[dependency-groups]
+dev = [
+    "maturin>=1.4",
+]
+
 [tool.maturin]
 python-source = "python"
 module-name = "ocdsmerge_rs"

@@ -1,5 +1,5 @@
 [package]
-name = "ocds-merge-rs"
+name = "ocdsmerge"
 version = "0.1.0"
 authors = ["Open Contracting Partnership <data@open-contracting.org>"]
 edition = "2021"
@@ -11,17 +11,24 @@ build = "build.rs"
 categories = ["command-line-utilities"]
 keywords = ["cli", "json"]
 
+# https://pyo3.rs/v0.26.0/#using-rust-from-python
+[lib]
+name = "ocdsmerge_rs"
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 derivative = "2.2"
+derive_more = { version = "2.0", features = ["display"] }
 fastrand = "1.9"
-human-panic = "1.0"
 indexmap = "1.9"
-log = "0.4"
+pyo3 = { version = "0.25", features = ["extension-module"] }
+pythonize = "0.25"
 serde = "1.0"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 
 [build-dependencies]
 glob = "0.3"
+pyo3-build-config = "0.25"
 
 [dev-dependencies]
 pretty_assertions = "1.0"

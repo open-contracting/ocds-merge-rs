@@ -5,6 +5,7 @@ build:
     python: "3"
 python:
   install:
+    - path: .
     - requirements: docs/requirements.txt
 sphinx:
   configuration: docs/conf.py

@@ -35,5 +35,6 @@ repos:
           "-Dclippy::pedantic",
           "-Dclippy::nursery",
           "-Dclippy::cargo",
+          "-Dclippy::too_many_arguments",
         ]
         pass_filenames: false

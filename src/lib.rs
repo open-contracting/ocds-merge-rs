@@ -1,8 +1,14 @@
 use std::collections::HashMap;
+use std::ffi::CString;
 
 use derivative::Derivative;
+use derive_more::Display;
 use indexmap::IndexMap;
-use log::warn;
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyTuple};
+use pyo3::PyTypeInfo;
+use pythonize::depythonize;
+use pythonize::pythonize;
 use serde_json::{json, Value};
 
 macro_rules! join {
@@ -17,22 +23,91 @@ macro_rules! field {
     };
 }
 
-#[derive(Debug, PartialEq)]
-enum Rule {
-    Omit,
-    Replace,
+mod exceptions {
+    use pyo3::create_exception;
+
+    create_exception!(exceptions, MergeErrorPy, pyo3::exceptions::PyException);
+    create_exception!(exceptions, NonObjectReleasePy, MergeErrorPy);
+    create_exception!(exceptions, InconsistentTypePy, MergeErrorPy);
+    create_exception!(exceptions, MergeWarningPy, pyo3::exceptions::PyUserWarning);
+    create_exception!(exceptions, DuplicateIdValuePy, MergeWarningPy);
 }
 
-enum Strategy {
+use exceptions::*;
+
+// The Rust implementation of OCDS Merge uses an enum instead of str.
+#[pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Debug, PartialEq, Clone)]
+pub enum Rule {
+    Omit,    // "omitWhenMerged"
+    Replace, // "wholeListMerge"
+}
+
+#[pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Debug, PartialEq, Clone)]
+pub enum Strategy {
     Append,
     MergeByPosition,
 }
 
+/// Error types for merging releases.
+#[derive(Debug, Clone)]
+pub enum MergeError {
+    /// Raised when a release is not an object.
+    NonObjectRelease { index: usize },
+    /// Raised when a path is a literal, an object, and/or an array in different releases.
+    InconsistentType {
+        path: Vec<Part>,
+        previous: Value,
+        current: String,
+    },
+}
+
+/// Raised when multiple objects have the same ID value in an array.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuplicateIdWarning {
+    pub id: String,
+    pub path: String,
+}
+
+impl std::error::Error for MergeError {}
+
+impl std::fmt::Display for MergeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MergeError::NonObjectRelease { index } => {
+                write!(f, "Release at index {index} must be an object")
+            }
+            MergeError::InconsistentType {
+                path,
+                previous,
+                current,
+            } => {
+                write!(
+                    f,
+                    "An earlier release had {previous} for /{}, but the current release has {current}",
+                    path.iter().map(ToString::to_string).collect::<Vec<_>>().join("/"),
+                )
+            }
+        }
+    }
+}
+
+impl From<MergeError> for PyErr {
+    fn from(err: MergeError) -> Self {
+        match err {
+            MergeError::NonObjectRelease { .. } => NonObjectReleasePy::new_err(err.to_string()),
+            MergeError::InconsistentType { .. } => InconsistentTypePy::new_err(err.to_string()),
+        }
+    }
+}
+
 /// A part of a JSON path.
-#[derive(Clone, Debug, Derivative, Eq)]
+#[derive(Clone, Debug, Derivative, Display, Eq)]
 #[derivative(Hash, PartialEq)]
-enum Part {
+pub enum Part {
     /// The identifier of an object in an array.
+    #[display("{id}")]
     Identifier {
         /// The extracted or generated identifier.
         id: Id,
@@ -46,31 +121,182 @@ enum Part {
 }
 
 /// The value of an "id" field.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-enum Id {
+#[derive(Clone, Debug, Display, Eq, Hash, PartialEq)]
+pub enum Id {
     Integer(i64),
     String(String),
 }
 
+#[pyclass(frozen)]
 #[derive(Default)]
-struct Merger {
+pub struct Merger {
     rules: HashMap<Vec<String>, Rule>,
     overrides: HashMap<Vec<String>, Strategy>,
 }
 
-impl Merger {
-    /// Merge the sorted releases into a compiled release.
-    pub fn create_compiled_release(&mut self, releases: &[Value]) -> Value {
-        let mut flattened = IndexMap::new();
+fn ensure_object(value: &Value, context: &str) -> PyResult<()> {
+    if !value.is_object() {
+        let actual_type = match value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => unreachable!(),
+        };
+        return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+            "{context} must be an object, not {actual_type}"
+        )));
+    }
+    Ok(())
+}
 
-        for release in releases {
+fn emit_warnings(py: Python<'_>, warnings: Vec<DuplicateIdWarning>) -> PyResult<()> {
+    for warning in warnings {
+        let message = format!(
+            "Multiple objects have the `id` value '{}' in the `{}` array",
+            warning.id, warning.path
+        );
+        PyErr::warn(py, &DuplicateIdValuePy::type_object(py), &CString::new(message)?, 2)?;
+    }
+    Ok(())
+}
+
+// The Rust implementation of OCDS Merge is simpler than the Python implementation:
+//
+// - `__init__` doesn't accept a `schema` argument. It doesn't sort releases.
+// - `get_rules` expects a dereferenced schema and doesn't accept a `str` value for a filename or a URL.
+// - `create_compiled_release` and `create_versioned_release` expect sorted releases and don't sort releases.
+// - `Merger` has no `extend` or `append` method.
+#[pymethods]
+impl Merger {
+    /// Initialize a reusable `Merger` instance for creating merged releases.
+    #[new]
+    #[pyo3(signature = (*, rules = None, overrides = None))]
+    fn new_py(rules: Option<HashMap<Vec<String>, Rule>>, overrides: Option<HashMap<Vec<String>, Strategy>>) -> Self {
+        Self {
+            rules: rules.unwrap_or_default(),
+            overrides: overrides.unwrap_or_default(),
+        }
+    }
+
+    /// Merge the **sorted** releases into a compiled release.
+    #[pyo3(name = "create_compiled_release")]
+    fn create_compiled_release_py<'py>(
+        &self,
+        py: Python<'py>,
+        releases: Vec<Bound<'py, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let deserialized = releases
+            .into_iter()
+            .map(|obj| depythonize(&obj))
+            .collect::<Result<Vec<Value>, _>>()?;
+
+        let (result, warnings) = py.allow_threads(|| self.create_compiled_release(&deserialized))?;
+        emit_warnings(py, warnings)?;
+
+        Ok(pythonize(py, &result)?.into())
+    }
+
+    /// Merge the **sorted** releases into a versioned release.
+    #[pyo3(name = "create_versioned_release")]
+    fn create_versioned_release_py<'py>(
+        &self,
+        py: Python<'py>,
+        releases: Vec<Bound<'py, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let mut deserialized = releases
+            .into_iter()
+            .map(|obj| depythonize(&obj))
+            .collect::<Result<Vec<Value>, _>>()?;
+
+        let (result, warnings) = py.allow_threads(|| self.create_versioned_release(&mut deserialized))?;
+        emit_warnings(py, warnings)?;
+
+        Ok(pythonize(py, &result)?.into())
+    }
+
+    /// Dereference all `$ref` properties to local definitions.
+    #[staticmethod]
+    #[pyo3(name = "dereference")]
+    fn dereference_py<'py>(py: Python<'py>, schema: Bound<'py, PyAny>) -> PyResult<Py<PyAny>> {
+        let mut schema_value: Value = depythonize(&schema)?;
+        ensure_object(&schema_value, "Schema")?;
+
+        let result = py.allow_threads(|| {
+            Self::dereference(&mut schema_value);
+            schema_value
+        });
+
+        Ok(pythonize(py, &result)?.into())
+    }
+
+    /// Calculate the merge rules from a JSON Schema.
+    ///
+    /// The key is a JSON path as a tuple, and the value is a merge rule.
+    #[staticmethod]
+    #[pyo3(name = "get_rules")]
+    fn get_rules_py<'py>(py: Python<'py>, schema: Bound<'py, PyAny>) -> PyResult<Py<PyAny>> {
+        let schema_value: Value = depythonize(&schema)?;
+        ensure_object(&schema_value, "Schema")?;
+
+        let properties = schema_value
+            .get("properties")
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyKeyError, _>("Schema must set 'properties'"))?;
+
+        let rules = py.allow_threads(|| Self::get_rules(properties, &[]));
+
+        // Same as `rules_py`.
+        let dict = PyDict::new(py);
+        for (path, rule) in &rules {
+            dict.set_item(PyTuple::new(py, path)?, Py::new(py, rule.clone())?)?;
+        }
+        Ok(dict.into())
+    }
+
+    // The `get_all` parameter is unsufficient, as the key must be a hashable tuple, not an unhashable list.
+    // https://pyo3.rs/v0.26.0/class#customizing-the-class
+    #[getter]
+    #[pyo3(name = "rules")]
+    fn rules_py<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+        let dict = PyDict::new(py);
+        for (path, rule) in &self.rules {
+            dict.set_item(PyTuple::new(py, path)?, Py::new(py, rule.clone())?)?;
+        }
+        Ok(dict.into())
+    }
+
+    #[getter]
+    #[pyo3(name = "overrides")]
+    fn overrides_py<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+        let dict = PyDict::new(py);
+        for (path, strategy) in &self.overrides {
+            dict.set_item(PyTuple::new(py, path)?, Py::new(py, strategy.clone())?)?;
+        }
+        Ok(dict.into())
+    }
+}
+
+// Most records contain a small number of releases. Thus, parallelization is rarely expected to improve performance –
+// and it is not worthwhile to maintain code branches based on the number of releases.
+impl Merger {
+    /// Merge the **sorted** releases into a compiled release.
+    pub fn create_compiled_release(&self, releases: &[Value]) -> Result<(Value, Vec<DuplicateIdWarning>), MergeError> {
+        let mut flattened = IndexMap::new();
+        let mut warnings = Vec::new();
+
+        for (index, release) in releases.iter().enumerate() {
+            if !release.is_object() {
+                return Err(MergeError::NonObjectRelease { index });
+            }
+
             // Store the values of fields that set "omitWhenMerged": true.
             // In OCDS 1.0, `ocid` incorrectly sets "mergeStrategy": "ocdsOmit".
             let ocid = release["ocid"].as_str().unwrap_or("None");
             let date = release["date"].as_str().unwrap_or("None");
 
             let mut flat = IndexMap::new();
-            self.flatten(&mut flat, &[], &mut vec![], false, release);
+            self.flatten(&mut flat, &[], &mut vec![], false, release, &mut warnings);
 
             flattened.extend(flat);
             flattened.insert(vec![field!("ocid")], ocid.into());
@@ -80,18 +306,26 @@ impl Merger {
 
         flattened.insert(vec![field!("tag")], json!(["compiled"]));
 
-        Self::unflatten(&flattened)
+        Ok((Self::unflatten(&flattened)?, warnings))
     }
 
-    /// Merge the sorted releases into a versioned release.
+    /// Merge the **sorted** releases into a versioned release.
     ///
     /// # Note
     ///
-    /// The ``"tag"`` field of each release is removed.
-    pub fn create_versioned_release(&mut self, releases: &mut [Value]) -> Value {
+    /// The ``"tag"`` field of each release is removed in-place.
+    pub fn create_versioned_release(
+        &self,
+        releases: &mut [Value],
+    ) -> Result<(Value, Vec<DuplicateIdWarning>), MergeError> {
         let mut flattened = IndexMap::new();
+        let mut warnings = Vec::new();
 
-        for release in releases {
+        for (index, release) in releases.iter_mut().enumerate() {
+            if !release.is_object() {
+                return Err(MergeError::NonObjectRelease { index });
+            }
+
             // Store the values of fields that set "omitWhenMerged": true.
             // Prior to OCDS 1.1.4, `tag` didn't set "omitWhenMerged": true.
             let ocid = release["ocid"].clone();
@@ -100,7 +334,7 @@ impl Merger {
             let tag = release.as_object_mut().expect("Release is not an object").remove("tag");
 
             let mut flat = IndexMap::new();
-            self.flatten(&mut flat, &[], &mut vec![], true, release);
+            self.flatten(&mut flat, &[], &mut vec![], true, release, &mut warnings);
 
             // Don't version the OCID.
             let path = vec![field!("ocid")];
@@ -123,7 +357,7 @@ impl Merger {
             }
         }
 
-        Self::unflatten(&flattened)
+        Ok((Self::unflatten(&flattened)?, warnings))
     }
 
     /// Calculate the merge rules from a JSON Schema.
@@ -206,12 +440,13 @@ impl Merger {
     }
 
     fn flatten(
-        &mut self,
+        &self,
         flattened: &mut IndexMap<Vec<Part>, Value>,
         path: &[Part],
         rule_path: &mut Vec<String>,
         versioned: bool,
         json: &Value,
+        warnings: &mut Vec<DuplicateIdWarning>,
     ) {
         match json {
             Value::Array(vec) => {
@@ -257,20 +492,28 @@ impl Merger {
 
                         // Check whether the identifier is used by other objects in the array.
                         if *identifiers.entry(join!(path, &default_key)).or_insert(index) != index {
-                            warn!(
-                                "Multiple objects have the `id` value {default_key:?} in the `{}` array",
-                                rule_path.join(".")
-                            );
+                            warnings.push(DuplicateIdWarning {
+                                id: default_key.to_string(),
+                                path: rule_path.join("."),
+                            });
                         }
 
-                        self.flatten_key_value(flattened, path, rule_path, versioned, &key, value);
+                        self.flatten_key_value(flattened, path, rule_path, versioned, &key, value, warnings);
                     }
                 }
             }
             Value::Object(map) => {
                 for (key, value) in map {
                     rule_path.push(key.clone());
-                    self.flatten_key_value(flattened, path, rule_path, versioned, &Part::Field(key.clone()), value);
+                    self.flatten_key_value(
+                        flattened,
+                        path,
+                        rule_path,
+                        versioned,
+                        &Part::Field(key.clone()),
+                        value,
+                        warnings,
+                    );
                     rule_path.pop();
                 }
             }
@@ -279,13 +522,14 @@ impl Merger {
     }
 
     fn flatten_key_value(
-        &mut self,
+        &self,
         flattened: &mut IndexMap<Vec<Part>, Value>,
         path: &[Part],
         rule_path: &mut Vec<String>,
         versioned: bool,
         key: &Part,
         value: &Value,
+        warnings: &mut Vec<DuplicateIdWarning>,
     ) {
         match self.rules.get(rule_path) {
             Some(Rule::Omit) => {}
@@ -320,13 +564,13 @@ impl Merger {
                 } else if matches!(value, Value::Object(map) if !map.is_empty())
                     || matches!(value, Value::Array(vec) if !vec.is_empty())
                 {
-                    self.flatten(flattened, &join!(path, key), rule_path, versioned, value);
+                    self.flatten(flattened, &join!(path, key), rule_path, versioned, value, warnings);
                 }
             }
         }
     }
 
-    fn unflatten(flattened: &IndexMap<Vec<Part>, Value>) -> Value {
+    fn unflatten(flattened: &IndexMap<Vec<Part>, Value>) -> Result<Value, MergeError> {
         let mut unflattened = json!({});
         // Track at which array index each object in an array maps to.
         let mut indices: HashMap<&[Part], usize> = HashMap::new();
@@ -340,13 +584,21 @@ impl Merger {
                 match part {
                     // The sub-path is to an item of an array.
                     Part::Identifier { original, .. } => {
+                        if !pointer.is_array() {
+                            return Err(MergeError::InconsistentType {
+                                path: key[..position].to_vec(),
+                                previous: pointer.clone(),
+                                current: "an array".to_string(),
+                            });
+                        }
+
                         let index = indices.entry(&key[..=position]).or_insert_with(|| {
                             let mut object = json!({});
                             // If the original object had an `id` value, set it.
                             if let Some(id) = original {
                                 object["id"] = id.clone();
                             }
-                            let array = pointer.as_array_mut().expect("Value should be an array");
+                            let array = pointer.as_array_mut().unwrap();
                             array.push(object);
                             array.len() - 1
                         });
@@ -354,6 +606,14 @@ impl Merger {
                     }
                     // The sub-path is to a property of an object.
                     Part::Field(field) => {
+                        if !pointer.is_object() {
+                            return Err(MergeError::InconsistentType {
+                                path: key[..position].to_vec(),
+                                previous: pointer.clone(),
+                                current: format!("an object with a '{field}' key"),
+                            });
+                        }
+
                         // If this is a visited node, change into it.
                         if pointer.get(field).is_some() {
                             pointer = &mut pointer[field];
@@ -375,8 +635,21 @@ impl Merger {
             }
         }
 
-        unflattened
+        Ok(unflattened)
     }
+}
+
+#[pymodule(gil_used = false)]
+fn ocdsmerge_rs<'py>(py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> {
+    m.add_class::<Merger>()?;
+    m.add_class::<Rule>()?;
+    m.add_class::<Strategy>()?;
+    m.add("MergeError", py.get_type::<MergeErrorPy>())?;
+    m.add("NonObjectReleaseError", py.get_type::<NonObjectReleasePy>())?;
+    m.add("InconsistentTypeError", py.get_type::<InconsistentTypePy>())?;
+    m.add("MergeWarning", py.get_type::<MergeWarningPy>())?;
+    m.add("DuplicateIdValueWarning", py.get_type::<DuplicateIdValuePy>())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -422,11 +695,13 @@ mod tests {
         serde_json::from_str(&contents).unwrap()
     }
 
+    // ocds-merge/tests/test_flatten.py::test_flatten_1
     #[test]
     fn flatten_1() {
-        let mut merger = Merger::default();
+        let merger = Merger::default();
 
         let mut flattened = IndexMap::new();
+        let mut warnings = Vec::new();
 
         let item = json!({
             "c": "I am a",
@@ -437,7 +712,7 @@ mod tests {
             ]
         });
 
-        merger.flatten(&mut flattened, &[], &mut vec![], false, &item);
+        merger.flatten(&mut flattened, &[], &mut vec![], false, &item, &mut warnings);
 
         assert_eq!(
             flattened,
@@ -451,17 +726,20 @@ mod tests {
             ])
         );
 
-        assert_eq!(Merger::unflatten(&flattened), item);
+        assert_eq!(warnings, Vec::new());
+        assert_eq!(Merger::unflatten(&flattened).unwrap(), item);
     }
 
+    // ocds-merge/tests/test_flatten.py::test_flatten_2
     #[test]
     fn flatten_2() {
         // OCDS in decimal.
         fastrand::seed(79_67_68_83);
 
-        let mut merger = Merger::default();
+        let merger = Merger::default();
 
         let mut flattened = IndexMap::new();
+        let mut warnings = Vec::new();
 
         let item = json!({
             "a": [
@@ -470,10 +748,7 @@ mod tests {
             ]
         });
 
-        merger.flatten(&mut flattened, &[], &mut vec![], false, &item);
-
-        let values = flattened.values().collect::<Vec<_>>();
-        let keys = flattened.keys().cloned().collect::<Vec<_>>();
+        merger.flatten(&mut flattened, &[], &mut vec![], false, &item, &mut warnings);
 
         assert_eq!(
             flattened,
@@ -486,7 +761,8 @@ mod tests {
             ])
         );
 
-        assert_eq!(Merger::unflatten(&flattened), item);
+        assert_eq!(warnings, Vec::new());
+        assert_eq!(Merger::unflatten(&flattened).unwrap(), item);
     }
 
     #[test]
@@ -578,12 +854,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn create_versioned_release_mutate() {
+        let merger = Merger::default();
+
+        let mut data = vec![
+            json!({
+                "ocid": "ocds-213czf-A",
+                "id": "1",
+                "date": "2000-01-01T00:00:00Z",
+                "tag": ["tender"]
+            }),
+            json!({
+                "ocid": "ocds-213czf-A",
+                "id": "2",
+                "date": "2000-01-02T00:00:00Z",
+                "tag": ["tenderUpdate"]
+            }),
+        ];
+
+        merger.create_versioned_release(&mut data).unwrap();
+
+        // The "tag" field is removed from the original data.
+        assert_eq!(
+            data,
+            vec![
+                json!({
+                    "ocid": "ocds-213czf-A",
+                    "id": "1",
+                    "date": "2000-01-01T00:00:00Z"
+                }),
+                json!({
+                    "ocid": "ocds-213czf-A",
+                    "id": "2",
+                    "date": "2000-01-02T00:00:00Z"
+                }),
+            ]
+        );
+    }
+
+    // See build.rs
     fn merge(suffix: &str, path: &str, schema: &str) {
         let mut schema = read(&format!("tests/fixtures/{schema}.json"));
 
         Merger::dereference(&mut schema);
 
-        let mut merger = Merger {
+        let merger = Merger {
             rules: Merger::get_rules(&schema["properties"], &[]),
             ..Default::default()
         };
@@ -591,8 +907,13 @@ mod tests {
         let mut fixture = read(&format!("{}.json", path.rsplit_once('-').unwrap().0));
 
         let actual = match suffix {
-            "compiled" => merger.create_compiled_release(&fixture.as_array().unwrap()),
-            "versioned" => merger.create_versioned_release(&mut fixture.as_array_mut().unwrap()),
+            "compiled" => merger.create_compiled_release(&fixture.as_array().unwrap()).unwrap().0,
+            "versioned" => {
+                merger
+                    .create_versioned_release(&mut fixture.as_array_mut().unwrap())
+                    .unwrap()
+                    .0
+            }
             _ => unreachable!(),
         };
 

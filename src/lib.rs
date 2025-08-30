@@ -37,14 +37,14 @@ use exceptions::*;
 
 // The Rust implementation of OCDS Merge uses an enum instead of str.
 #[pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE")]
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Rule {
     Omit,    // "omitWhenMerged"
     Replace, // "wholeListMerge"
 }
 
 #[pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE")]
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Strategy {
     Append,
     MergeByPosition,
@@ -64,7 +64,7 @@ pub enum MergeError {
 }
 
 /// Raised when multiple objects have the same ID value in an array.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DuplicateIdWarning {
     pub id: String,
     pub path: String,
@@ -75,10 +75,10 @@ impl std::error::Error for MergeError {}
 impl std::fmt::Display for MergeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MergeError::NonObjectRelease { index } => {
+            Self::NonObjectRelease { index } => {
                 write!(f, "Release at index {index} must be an object")
             }
-            MergeError::InconsistentType {
+            Self::InconsistentType {
                 path,
                 previous,
                 current,
@@ -219,8 +219,8 @@ impl Merger {
     /// Dereference all `$ref` properties to local definitions.
     #[staticmethod]
     #[pyo3(name = "dereference")]
-    fn dereference_py<'py>(py: Python<'py>, schema: Bound<'py, PyAny>) -> PyResult<Py<PyAny>> {
-        let mut schema_value: Value = depythonize(&schema)?;
+    fn dereference_py<'py>(py: Python<'py>, schema: &Bound<'py, PyAny>) -> PyResult<Py<PyAny>> {
+        let mut schema_value: Value = depythonize(schema)?;
         ensure_object(&schema_value, "Schema")?;
 
         let result = py.allow_threads(|| {
@@ -236,8 +236,8 @@ impl Merger {
     /// The key is a JSON path as a tuple, and the value is a merge rule.
     #[staticmethod]
     #[pyo3(name = "get_rules")]
-    fn get_rules_py<'py>(py: Python<'py>, schema: Bound<'py, PyAny>) -> PyResult<Py<PyAny>> {
-        let schema_value: Value = depythonize(&schema)?;
+    fn get_rules_py<'py>(py: Python<'py>, schema: &Bound<'py, PyAny>) -> PyResult<Py<PyAny>> {
+        let schema_value: Value = depythonize(schema)?;
         ensure_object(&schema_value, "Schema")?;
 
         let properties = schema_value
@@ -258,7 +258,7 @@ impl Merger {
     // https://pyo3.rs/v0.26.0/class#customizing-the-class
     #[getter]
     #[pyo3(name = "rules")]
-    fn rules_py<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+    fn rules_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         for (path, rule) in &self.rules {
             dict.set_item(PyTuple::new(py, path)?, Py::new(py, rule.clone())?)?;
@@ -268,7 +268,7 @@ impl Merger {
 
     #[getter]
     #[pyo3(name = "overrides")]
-    fn overrides_py<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+    fn overrides_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         for (path, strategy) in &self.overrides {
             dict.set_item(PyTuple::new(py, path)?, Py::new(py, strategy.clone())?)?;
@@ -361,6 +361,7 @@ impl Merger {
     }
 
     /// Calculate the merge rules from a JSON Schema.
+    #[must_use]
     pub fn get_rules(value: &Value, path: &[String]) -> HashMap<Vec<String>, Rule> {
         let mut rules = HashMap::new();
 
@@ -518,7 +519,7 @@ impl Merger {
                 }
             }
             _ => unreachable!(),
-        };
+        }
     }
 
     fn flatten_key_value(

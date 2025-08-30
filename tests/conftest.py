@@ -2,7 +2,6 @@ from pathlib import Path
 
 import jsonref
 import pytest
-
 from ocdsmerge_rs import Merger
 
 

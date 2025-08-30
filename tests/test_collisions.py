@@ -2,9 +2,9 @@
 import warnings
 
 import pytest
-
 from ocdsmerge_rs import Merger, Strategy
 from ocdsmerge_rs.exceptions import DuplicateIdValueWarning
+
 from tests import load
 
 releases = load("schema", "identifier-merge-duplicate-id.json")

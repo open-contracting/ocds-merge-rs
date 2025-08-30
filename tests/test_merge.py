@@ -6,16 +6,13 @@
 # - test_extend
 # - test_appand
 import json
-import os.path
 import re
 import warnings
 from copy import deepcopy
-from glob import glob
 from pathlib import Path
 
 import jsonref
 import pytest
-
 from ocdsmerge_rs import Merger
 from ocdsmerge_rs.exceptions import DuplicateIdValueWarning, InconsistentTypeError
 from tests import load, path, schema_url, tags
@@ -24,20 +21,20 @@ from tests import load, path, schema_url, tags
 def get_test_cases():
     test_merge_argvalues = []
 
-    for minor_version, schema in (
+    for minor_version, path_or_url in (
         ("1.1", path("release-schema-1__1__4.json")),
         ("1.1", schema_url),
         ("1.0", schema_url),
         ("schema", path("schema.json")),
     ):
-        if isinstance(schema, Path):
-            with schema.open() as f:
+        if isinstance(path_or_url, Path):
+            with path_or_url.open() as f:
                 schema = jsonref.load(f)
         else:
-            schema = jsonref.load_uri(schema.format(tags[minor_version]))
+            schema = jsonref.load_uri(path_or_url.format(tags[minor_version]))
         for suffix in ("compiled", "versioned"):
-            filenames = glob(str(path(minor_version, f"*-{suffix}.json")))
-            assert len(filenames), f"{suffix} fixtures not found"
+            filenames = list(path(minor_version).glob(f"*-{suffix}.json"))
+            assert filenames, f"{suffix} fixtures not found"
             test_merge_argvalues += [(filename, schema) for filename in filenames]
 
     return test_merge_argvalues
@@ -47,11 +44,11 @@ def get_test_cases():
 def test_merge(filename, schema):
     merger = Merger(rules=Merger.get_rules(schema))
 
-    infix = "compiled" if filename.endswith("-compiled.json") else "versioned"
+    infix = "compiled" if filename.name.endswith("-compiled.json") else "versioned"
 
-    with open(filename) as f:
+    with filename.open() as f:
         expected = json.load(f)
-    with open(re.sub(r"-(?:compiled|versioned)", "", filename)) as f:
+    with (filename.parent / re.sub(r"-(?:compiled|versioned)", "", filename.name)).open() as f:
         releases = json.load(f)
 
     original = deepcopy(releases)
@@ -82,7 +79,7 @@ def test_inconsistent_type_object_last(value, infix, empty_merger):
 
     assert (
         str(excinfo.value)
-        == f"An earlier release had {infix} for /integer, but the current release has an object with a 'object' key"  # noqa: E501
+        == f"An earlier release had {infix} for /integer, but the current release has an object with a 'object' key"
     )
 
 
@@ -174,7 +171,7 @@ def test_create_versioned_release_mutate(simple_merger):
 
     simple_merger.create_versioned_release(data)
 
-    # From Python, the tag field is not removed from the original data – unlike Rust.
+    # From Python, the tag field is not removed from the original data - unlike Rust.
     assert data == [
         {"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "tag": ["tender"]},
         {"ocid": "ocds-213czf-A", "id": "2", "date": "2000-01-02T00:00:00Z", "tag": ["tenderUpdate"]},

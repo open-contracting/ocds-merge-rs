@@ -26,14 +26,20 @@ macro_rules! field {
 mod exceptions {
     use pyo3::create_exception;
 
-    create_exception!(exceptions, MergeErrorPy, pyo3::exceptions::PyException);
-    create_exception!(exceptions, NonObjectReleasePy, MergeErrorPy);
-    create_exception!(exceptions, InconsistentTypePy, MergeErrorPy);
-    create_exception!(exceptions, MergeWarningPy, pyo3::exceptions::PyUserWarning);
-    create_exception!(exceptions, DuplicateIdValuePy, MergeWarningPy);
+    create_exception!(exceptions, MergeError, pyo3::exceptions::PyException);
+    create_exception!(exceptions, NonObjectReleaseError, MergeError);
+    create_exception!(exceptions, InconsistentTypeError, MergeError);
+    create_exception!(exceptions, MissingDateKeyError, MergeError);
+    create_exception!(exceptions, NullDateValueError, MergeError);
+    create_exception!(exceptions, NonStringDateValueError, MergeError);
+    create_exception!(exceptions, MergeWarning, pyo3::exceptions::PyUserWarning);
+    create_exception!(exceptions, DuplicateIdValueWarning, MergeWarning);
 }
 
-use exceptions::*;
+use exceptions::{
+    DuplicateIdValueWarning, InconsistentTypeError, MergeError, MergeWarning, MissingDateKeyError,
+    NonObjectReleaseError, NonStringDateValueError, NullDateValueError,
+};
 
 // The Rust implementation of OCDS Merge uses an enum instead of str.
 #[pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE")]
@@ -52,7 +58,7 @@ pub enum Strategy {
 
 /// Error types for merging releases.
 #[derive(Debug, Clone)]
-pub enum MergeError {
+pub enum Error {
     /// Raised when a release is not an object.
     NonObjectRelease { index: usize },
     /// Raised when a path is a literal, an object, and/or an array in different releases.
@@ -61,6 +67,12 @@ pub enum MergeError {
         previous: Value,
         current: String,
     },
+    /// Raised when a release is missing a 'date' key.
+    MissingDateKey { index: usize },
+    /// Raised when a release has a null 'date' value.
+    NullDateValue { index: usize },
+    /// Raised when a release has a non-string 'date' value.
+    NonStringDateValue { index: usize },
 }
 
 /// Raised when multiple objects have the same ID value in an array.
@@ -70,9 +82,9 @@ pub struct DuplicateIdWarning {
     pub path: String,
 }
 
-impl std::error::Error for MergeError {}
+impl std::error::Error for Error {}
 
-impl std::fmt::Display for MergeError {
+impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NonObjectRelease { index } => {
@@ -89,15 +101,27 @@ impl std::fmt::Display for MergeError {
                     path.iter().map(ToString::to_string).collect::<Vec<_>>().join("/"),
                 )
             }
+            Self::MissingDateKey { index } => {
+                write!(f, "Release at index {index} is missing a `date` field")
+            }
+            Self::NullDateValue { index } => {
+                write!(f, "Release at index {index} has a null `date` value")
+            }
+            Self::NonStringDateValue { index } => {
+                write!(f, "Release at index {index} has a non-string `date` value")
+            }
         }
     }
 }
 
-impl From<MergeError> for PyErr {
-    fn from(err: MergeError) -> Self {
+impl From<Error> for PyErr {
+    fn from(err: Error) -> Self {
         match err {
-            MergeError::NonObjectRelease { .. } => NonObjectReleasePy::new_err(err.to_string()),
-            MergeError::InconsistentType { .. } => InconsistentTypePy::new_err(err.to_string()),
+            Error::NonObjectRelease { .. } => NonObjectReleaseError::new_err(err.to_string()),
+            Error::InconsistentType { .. } => InconsistentTypeError::new_err(err.to_string()),
+            Error::MissingDateKey { .. } => MissingDateKeyError::new_err(err.to_string()),
+            Error::NullDateValue { .. } => NullDateValueError::new_err(err.to_string()),
+            Error::NonStringDateValue { .. } => NonStringDateValueError::new_err(err.to_string()),
         }
     }
 }
@@ -157,7 +181,12 @@ fn emit_warnings(py: Python<'_>, warnings: Vec<DuplicateIdWarning>) -> PyResult<
             "Multiple objects have the `id` value '{}' in the `{}` array",
             warning.id, warning.path
         );
-        PyErr::warn(py, &DuplicateIdValuePy::type_object(py), &CString::new(message)?, 2)?;
+        PyErr::warn(
+            py,
+            &DuplicateIdValueWarning::type_object(py),
+            &CString::new(message)?,
+            2,
+        )?;
     }
     Ok(())
 }
@@ -281,13 +310,13 @@ impl Merger {
 // and it is not worthwhile to maintain code branches based on the number of releases.
 impl Merger {
     /// Merge the **sorted** releases into a compiled release.
-    pub fn create_compiled_release(&self, releases: &[Value]) -> Result<(Value, Vec<DuplicateIdWarning>), MergeError> {
+    pub fn create_compiled_release(&self, releases: &[Value]) -> Result<(Value, Vec<DuplicateIdWarning>), Error> {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
 
         for (index, release) in releases.iter().enumerate() {
             if !release.is_object() {
-                return Err(MergeError::NonObjectRelease { index });
+                return Err(Error::NonObjectRelease { index });
             }
 
             // Store the values of fields that set "omitWhenMerged": true.
@@ -314,16 +343,13 @@ impl Merger {
     /// # Note
     ///
     /// The ``"tag"`` field of each release is removed in-place.
-    pub fn create_versioned_release(
-        &self,
-        releases: &mut [Value],
-    ) -> Result<(Value, Vec<DuplicateIdWarning>), MergeError> {
+    pub fn create_versioned_release(&self, releases: &mut [Value]) -> Result<(Value, Vec<DuplicateIdWarning>), Error> {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
 
         for (index, release) in releases.iter_mut().enumerate() {
             if !release.is_object() {
-                return Err(MergeError::NonObjectRelease { index });
+                return Err(Error::NonObjectRelease { index });
             }
 
             // Store the values of fields that set "omitWhenMerged": true.
@@ -571,7 +597,7 @@ impl Merger {
         }
     }
 
-    fn unflatten(flattened: &IndexMap<Vec<Part>, Value>) -> Result<Value, MergeError> {
+    fn unflatten(flattened: &IndexMap<Vec<Part>, Value>) -> Result<Value, Error> {
         let mut unflattened = json!({});
         // Track at which array index each object in an array maps to.
         let mut indices: HashMap<&[Part], usize> = HashMap::new();
@@ -586,7 +612,7 @@ impl Merger {
                     // The sub-path is to an item of an array.
                     Part::Identifier { original, .. } => {
                         if !pointer.is_array() {
-                            return Err(MergeError::InconsistentType {
+                            return Err(Error::InconsistentType {
                                 path: key[..position].to_vec(),
                                 previous: pointer.clone(),
                                 current: "an array".to_string(),
@@ -608,7 +634,7 @@ impl Merger {
                     // The sub-path is to a property of an object.
                     Part::Field(field) => {
                         if !pointer.is_object() {
-                            return Err(MergeError::InconsistentType {
+                            return Err(Error::InconsistentType {
                                 path: key[..position].to_vec(),
                                 previous: pointer.clone(),
                                 current: format!("an object with a '{field}' key"),
@@ -645,11 +671,14 @@ fn ocdsmerge_rs<'py>(py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> 
     m.add_class::<Merger>()?;
     m.add_class::<Rule>()?;
     m.add_class::<Strategy>()?;
-    m.add("MergeError", py.get_type::<MergeErrorPy>())?;
-    m.add("NonObjectReleaseError", py.get_type::<NonObjectReleasePy>())?;
-    m.add("InconsistentTypeError", py.get_type::<InconsistentTypePy>())?;
-    m.add("MergeWarning", py.get_type::<MergeWarningPy>())?;
-    m.add("DuplicateIdValueWarning", py.get_type::<DuplicateIdValuePy>())?;
+    m.add("MergeError", py.get_type::<MergeError>())?;
+    m.add("NonObjectReleaseError", py.get_type::<NonObjectReleaseError>())?;
+    m.add("InconsistentTypeError", py.get_type::<InconsistentTypeError>())?;
+    m.add("MissingDateKeyError", py.get_type::<MissingDateKeyError>())?;
+    m.add("NullDateValueError", py.get_type::<NullDateValueError>())?;
+    m.add("NonStringDateValueError", py.get_type::<NonStringDateValueError>())?;
+    m.add("MergeWarning", py.get_type::<MergeWarning>())?;
+    m.add("DuplicateIdValueWarning", py.get_type::<DuplicateIdValueWarning>())?;
     Ok(())
 }
 

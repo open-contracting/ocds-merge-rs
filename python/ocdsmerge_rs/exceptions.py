@@ -3,7 +3,10 @@ from .ocdsmerge_rs import (
     InconsistentTypeError,
     MergeError,
     MergeWarning,
+    MissingDateKeyError,
     NonObjectReleaseError,
+    NonStringDateValueError,
+    NullDateValueError,
 )
 
 __all__ = [
@@ -11,5 +14,8 @@ __all__ = [
     "InconsistentTypeError",
     "MergeError",
     "MergeWarning",
+    "MissingDateKeyError",
     "NonObjectReleaseError",
+    "NonStringDateValueError",
+    "NullDateValueError",
 ]

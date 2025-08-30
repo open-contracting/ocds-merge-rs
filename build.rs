@@ -30,7 +30,7 @@ fn main() {
                     r#"
 #[test]
 fn {function}() {{
-    merge("{suffix}", "{}", "{schema}")
+    merge("{suffix}", r"{}", "{schema}")
 }}
 "#,
                     path.display()

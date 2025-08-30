@@ -310,6 +310,13 @@ impl Merger {
 // and it is not worthwhile to maintain code branches based on the number of releases.
 impl Merger {
     /// Merge the **sorted** releases into a compiled release.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - A release is not an object
+    /// - A path is a literal, an object, and/or an array in different releases
+    /// - A release has missing, null, or non-string `date` values, when merging multiple releases
     pub fn create_compiled_release(&self, releases: &[Value]) -> Result<(Value, Vec<DuplicateIdWarning>), Error> {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
@@ -343,6 +350,18 @@ impl Merger {
     /// # Note
     ///
     /// The ``"tag"`` field of each release is removed in-place.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - A release is not an object
+    /// - A path is a literal, an object, and/or an array in different releases
+    /// - A release has missing, null, or non-string `date` values, when merging multiple releases
+    ///
+    /// # Panics
+    ///
+    /// Panics if a release that passed the object check cannot be converted to an object.
+    /// This should not happen under normal circumstances.
     pub fn create_versioned_release(&self, releases: &mut [Value]) -> Result<(Value, Vec<DuplicateIdWarning>), Error> {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
@@ -548,6 +567,7 @@ impl Merger {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn flatten_key_value(
         &self,
         flattened: &mut IndexMap<Vec<Part>, Value>,

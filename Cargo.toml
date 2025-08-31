@@ -2,7 +2,7 @@
 name = "ocdsmerge"
 version = "0.1.0"
 authors = ["Open Contracting Partnership <data@open-contracting.org>"]
-edition = "2021"
+edition = "2024"
 description = "Merges JSON texts conforming to the Open Contracting Data Standard."
 homepage = "http://github.com/open-contracting/ocds-merge-rs"
 repository = "http://github.com/open-contracting/ocds-merge-rs"

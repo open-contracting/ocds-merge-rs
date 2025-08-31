@@ -4,12 +4,12 @@ use std::ffi::CString;
 use derivative::Derivative;
 use derive_more::Display;
 use indexmap::IndexMap;
+use pyo3::PyTypeInfo;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
-use pyo3::PyTypeInfo;
 use pythonize::depythonize;
 use pythonize::pythonize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 macro_rules! join {
     ( $vec:expr , $item:expr ) => {
@@ -501,16 +501,16 @@ impl Merger {
     /// Dereference all ``$ref`` properties to local definitions.
     pub fn dereference(value: &mut Value) {
         fn f(value: &mut Value, schema: &Value, visited: &Vec<String>) {
-            if let Value::Object(object) = value {
-                if let Some(Value::String(reference)) = object.remove("$ref") {
-                    if visited.contains(&reference) {
-                        // If we already visited this $ref in this $ref chain, stop.
-                        return;
-                    }
-                    if let Some(mut target) = schema.pointer(&reference[1..]).cloned() {
-                        f(&mut target, schema, &join!(visited, &reference));
-                        *value = target;
-                    }
+            if let Value::Object(object) = value
+                && let Some(Value::String(reference)) = object.remove("$ref")
+            {
+                if visited.contains(&reference) {
+                    // If we already visited this $ref in this $ref chain, stop.
+                    return;
+                }
+                if let Some(mut target) = schema.pointer(&reference[1..]).cloned() {
+                    f(&mut target, schema, &join!(visited, &reference));
+                    *value = target;
                 }
             }
 

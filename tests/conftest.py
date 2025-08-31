@@ -13,4 +13,5 @@ def simple_merger():
 
 @pytest.fixture
 def empty_merger():
-    return Merger()
+    with (Path("tests") / "fixtures" / "release-schema-1__1__4.json").open() as f:
+        return Merger(rules=Merger.get_rules(jsonref.load(f)))

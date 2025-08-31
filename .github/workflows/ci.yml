@@ -27,10 +27,15 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: uv venv -p ${{ matrix.python-version }}
       - run: uv pip install .[dev,test]
+      - if: matrix.os == 'windows-latest'
+        run: |
+          cargo test
+          pytest -W error
+      - if: matrix.os != 'windows-latest'
       - run: |
           source <(cargo llvm-cov show-env --export-prefix)
           cargo test
           uv run maturin develop --uv
           uv run coverage run --source=ocdsmerge_rs -m pytest -W error
-      - if: matrix.os == 'ubuntu-latest'
+      - if: matrix.os != 'windows-latest'
         uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b # v2.3.6

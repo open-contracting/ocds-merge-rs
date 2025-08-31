@@ -22,14 +22,13 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = [
-    "jsonref",
-    "pytest",
-]
-
-[dependency-groups]
 dev = [
     "maturin>=1.4",
+]
+test = [
+    "coverage",
+    "jsonref",
+    "pytest",
 ]
 
 [tool.maturin]

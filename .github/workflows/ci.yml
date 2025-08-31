@@ -15,6 +15,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
         with:
@@ -22,11 +25,12 @@ jobs:
       # https://github.com/Swatinem/rust-cache/issues/93#issuecomment-1321064841
       - run: cargo update
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: pip install .[dev,test]
+      - run: uv venv -p ${{ matrix.python-version }}
+      - run: uv pip install .[dev,test]
       - run: |
           source <(cargo llvm-cov show-env --export-prefix)
           cargo test
-          maturin develop
-          coverage run --source=ocdsmerge_rs -m pytest -W error
+          uv run maturin develop --uv
+          uv run coverage run --source=ocdsmerge_rs -m pytest -W error
       - if: matrix.os == 'ubuntu-latest'
         uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b # v2.3.6

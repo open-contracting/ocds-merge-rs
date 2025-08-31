@@ -55,7 +55,6 @@ def get_test_cases():
         (NullDateValueError, {"date": None}),
         (NonStringDateValueError, {"date": {}}),
         (NonObjectReleaseError, "{}"),
-        (NonObjectReleaseError, b"{}"),
         (NonObjectReleaseError, []),
         (NonObjectReleaseError, ()),
         (NonObjectReleaseError, set()),

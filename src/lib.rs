@@ -428,7 +428,7 @@ impl Merger {
     ///
     /// # Note
     ///
-    /// The ``"tag"`` field of each release is removed in-place.
+    /// The ``"ocid"`` and ``"tag"`` fields of each release are removed in-place.
     ///
     /// # Errors
     ///
@@ -1019,12 +1019,10 @@ mod tests {
             data,
             vec![
                 json!({
-                    "ocid": "ocds-213czf-A",
                     "id": "1",
                     "date": "2000-01-01T00:00:00Z"
                 }),
                 json!({
-                    "ocid": "ocds-213czf-A",
                     "id": "2",
                     "date": "2000-01-02T00:00:00Z"
                 }),

@@ -32,7 +32,7 @@ jobs:
           cargo test
           pytest -W error
       - if: matrix.os != 'windows-latest'
-      - run: |
+        run: |
           source <(cargo llvm-cov show-env --export-prefix)
           cargo test
           uv run maturin develop --uv

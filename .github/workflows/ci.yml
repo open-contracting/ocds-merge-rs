@@ -31,7 +31,7 @@ jobs:
         name: Run tests
         run: |
           cargo test
-          pytest -W error
+          uv run pytest -W error
       - if: matrix.os != 'windows-latest'
         name: Run tests
         run: |

@@ -37,5 +37,6 @@ jobs:
           cargo test
           uv run maturin develop --uv
           uv run coverage run --source=ocdsmerge_rs -m pytest -W error
+          cargo llvm-cov report --lcov --output-path .coverage
       - if: matrix.os != 'windows-latest'
         uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b # v2.3.6

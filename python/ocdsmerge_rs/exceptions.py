@@ -7,6 +7,7 @@ from .ocdsmerge_rs import (
     NonObjectReleaseError,
     NonStringDateValueError,
     NullDateValueError,
+    OutOfOrderReleaseError,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "NonObjectReleaseError",
     "NonStringDateValueError",
     "NullDateValueError",
+    "OutOfOrderReleaseError",
 ]

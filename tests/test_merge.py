@@ -21,6 +21,7 @@ from ocdsmerge_rs.exceptions import (
     NonObjectReleaseError,
     NonStringDateValueError,
     NullDateValueError,
+    OutOfOrderReleaseError,
 )
 
 from tests import path, schema_url, tags
@@ -156,6 +157,22 @@ def test_inconsistent_type_object_first(empty_merger):
 
     assert (
         str(excinfo.value) == 'An earlier release had {"object":1} for /integer, but the current release has an array'
+    )
+
+
+@pytest.mark.parametrize("method", ["compiled", "versioned"])
+def test_out_of_order_releases(method, empty_merger):
+    data = [
+        {"date": "2020-01-03T00:00:00Z", "id": "1"},
+        {"date": "2020-01-02T00:00:00Z", "id": "2"},
+    ]
+
+    with pytest.raises(OutOfOrderReleaseError) as excinfo:
+        getattr(empty_merger, f"create_{method}_release")(data)
+
+    assert (
+        str(excinfo.value)
+        == "Release at index 1 has date '2020-01-02T00:00:00Z' which is less than the previous '2020-01-03T00:00:00Z'"
     )
 
 

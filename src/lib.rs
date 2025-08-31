@@ -32,13 +32,14 @@ mod exceptions {
     create_exception!(exceptions, MissingDateKeyError, MergeError);
     create_exception!(exceptions, NullDateValueError, MergeError);
     create_exception!(exceptions, NonStringDateValueError, MergeError);
+    create_exception!(exceptions, OutOfOrderReleaseError, MergeError);
     create_exception!(exceptions, MergeWarning, pyo3::exceptions::PyUserWarning);
     create_exception!(exceptions, DuplicateIdValueWarning, MergeWarning);
 }
 
 use exceptions::{
     DuplicateIdValueWarning, InconsistentTypeError, MergeError, MergeWarning, MissingDateKeyError,
-    NonObjectReleaseError, NonStringDateValueError, NullDateValueError,
+    NonObjectReleaseError, NonStringDateValueError, NullDateValueError, OutOfOrderReleaseError,
 };
 
 // The Rust implementation of OCDS Merge uses an enum instead of str.
@@ -73,6 +74,12 @@ pub enum Error {
     NullDateValue { index: usize },
     /// Raised when a release has a non-string 'date' value.
     NonStringDateValue { index: usize },
+    /// Raised when a release is out of order (by ascending date).
+    OutOfOrderRelease {
+        index: usize,
+        previous: String,
+        current: String,
+    },
 }
 
 /// Raised when multiple objects have the same ID value in an array.
@@ -110,6 +117,16 @@ impl std::fmt::Display for Error {
             Self::NonStringDateValue { index } => {
                 write!(f, "Release at index {index} has a non-string `date` value")
             }
+            Self::OutOfOrderRelease {
+                index,
+                previous,
+                current,
+            } => {
+                write!(
+                    f,
+                    "Release at index {index} has date '{current}' which is less than the previous '{previous}'"
+                )
+            }
         }
     }
 }
@@ -122,6 +139,7 @@ impl From<Error> for PyErr {
             Error::MissingDateKey { .. } => MissingDateKeyError::new_err(err.to_string()),
             Error::NullDateValue { .. } => NullDateValueError::new_err(err.to_string()),
             Error::NonStringDateValue { .. } => NonStringDateValueError::new_err(err.to_string()),
+            Error::OutOfOrderRelease { .. } => OutOfOrderReleaseError::new_err(err.to_string()),
         }
     }
 }
@@ -183,6 +201,20 @@ fn extract_date(release: &Value, index: usize, multiple_releases: bool) -> Resul
             }
         }
     }
+}
+
+fn ensure_order(previous_date: Option<&String>, current_date: &Value, index: usize) -> Result<(), Error> {
+    if let Some(previous) = previous_date
+        && let Value::String(current) = current_date
+        && current < previous
+    {
+        return Err(Error::OutOfOrderRelease {
+            index,
+            previous: previous.clone(),
+            current: current.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn ensure_object(value: &Value, context: &str) -> PyResult<()> {
@@ -348,6 +380,7 @@ impl Merger {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
         let multiple_releases = releases.len() > 1;
+        let mut previous_date = None;
 
         for (index, release) in releases.iter().enumerate() {
             if !release.is_object() {
@@ -358,6 +391,13 @@ impl Merger {
             // In OCDS 1.0, `ocid` incorrectly sets "mergeStrategy": "ocdsOmit".
             let ocid = release.get("ocid").unwrap_or(&Value::Null);
             let date = extract_date(release, index, multiple_releases)?;
+
+            if multiple_releases {
+                ensure_order(previous_date.as_ref(), &date, index)?;
+                if let Value::String(string) = &date {
+                    previous_date = Some(string.clone());
+                }
+            }
 
             let mut flat = IndexMap::new();
             self.flatten(&mut flat, &[], &mut vec![], false, release, &mut warnings);
@@ -405,6 +445,7 @@ impl Merger {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
         let multiple_releases = releases.len() > 1;
+        let mut previous_date = None;
 
         for (index, release) in releases.iter_mut().enumerate() {
             if !release.is_object() {
@@ -414,6 +455,13 @@ impl Merger {
             // Store the values of fields that set "omitWhenMerged": true.
             let id = release["id"].clone();
             let date = extract_date(release, index, multiple_releases)?;
+
+            if multiple_releases {
+                ensure_order(previous_date.as_ref(), &date, index)?;
+                if let Value::String(string) = &date {
+                    previous_date = Some(string.clone());
+                }
+            }
 
             let release_object = release.as_object_mut().expect("Release is not an object");
             // Don't version the OCID. (Restore it after flattening.)
@@ -737,6 +785,7 @@ fn ocdsmerge_rs<'py>(py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> 
     m.add("MissingDateKeyError", py.get_type::<MissingDateKeyError>())?;
     m.add("NullDateValueError", py.get_type::<NullDateValueError>())?;
     m.add("NonStringDateValueError", py.get_type::<NonStringDateValueError>())?;
+    m.add("OutOfOrderReleaseError", py.get_type::<OutOfOrderReleaseError>())?;
     m.add("MergeWarning", py.get_type::<MergeWarning>())?;
     m.add("DuplicateIdValueWarning", py.get_type::<DuplicateIdValueWarning>())?;
     Ok(())

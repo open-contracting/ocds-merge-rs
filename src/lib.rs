@@ -158,6 +158,33 @@ pub struct Merger {
     overrides: HashMap<Vec<String>, Strategy>,
 }
 
+fn extract_date(release: &Value, index: usize, multiple_releases: bool) -> Result<Value, Error> {
+    match release.get("date") {
+        Some(Value::String(string)) => Ok(Value::String(string.clone())),
+        Some(Value::Null) => {
+            if multiple_releases {
+                Err(Error::NullDateValue { index })
+            } else {
+                Ok(Value::Null)
+            }
+        }
+        Some(other) => {
+            if multiple_releases {
+                Err(Error::NonStringDateValue { index })
+            } else {
+                Ok(other.clone())
+            }
+        }
+        None => {
+            if multiple_releases {
+                Err(Error::MissingDateKey { index })
+            } else {
+                Ok(Value::Null)
+            }
+        }
+    }
+}
+
 fn ensure_object(value: &Value, context: &str) -> PyResult<()> {
     if !value.is_object() {
         let actual_type = match value {
@@ -316,10 +343,11 @@ impl Merger {
     /// Returns an error if:
     /// - A release is not an object
     /// - A path is a literal, an object, and/or an array in different releases
-    /// - A release has missing, null, or non-string `date` values, when merging multiple releases
+    /// - A release has a missing, null, or non-string `date` value, when merging multiple releases
     pub fn create_compiled_release(&self, releases: &[Value]) -> Result<(Value, Vec<DuplicateIdWarning>), Error> {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
+        let multiple_releases = releases.len() > 1;
 
         for (index, release) in releases.iter().enumerate() {
             if !release.is_object() {
@@ -328,16 +356,27 @@ impl Merger {
 
             // Store the values of fields that set "omitWhenMerged": true.
             // In OCDS 1.0, `ocid` incorrectly sets "mergeStrategy": "ocdsOmit".
-            let ocid = release["ocid"].as_str().unwrap_or("None");
-            let date = release["date"].as_str().unwrap_or("None");
+            let ocid = release.get("ocid").unwrap_or(&Value::Null);
+            let date = extract_date(release, index, multiple_releases)?;
 
             let mut flat = IndexMap::new();
             self.flatten(&mut flat, &[], &mut vec![], false, release, &mut warnings);
 
+            let date_str = match &date {
+                Value::String(s) => s,
+                Value::Null => "None", // to match Python behavior
+                other => &other.to_string(),
+            };
+            let ocid_str = match &ocid {
+                Value::String(s) => s,
+                Value::Null => "None", // to match Python behavior
+                other => &other.to_string(),
+            };
+
             flattened.extend(flat);
-            flattened.insert(vec![field!("ocid")], ocid.into());
-            flattened.insert(vec![field!("date")], date.into());
-            flattened.insert(vec![field!("id")], Value::String(format!("{ocid}-{date}")));
+            flattened.insert(vec![field!("ocid")], ocid.clone());
+            flattened.insert(vec![field!("date")], date.clone());
+            flattened.insert(vec![field!("id")], Value::String(format!("{ocid_str}-{date_str}")));
         }
 
         flattened.insert(vec![field!("tag")], json!(["compiled"]));
@@ -356,7 +395,7 @@ impl Merger {
     /// Returns an error if:
     /// - A release is not an object
     /// - A path is a literal, an object, and/or an array in different releases
-    /// - A release has missing, null, or non-string `date` values, when merging multiple releases
+    /// - A release has a missing, null, or non-string `date` value, when merging multiple releases
     ///
     /// # Panics
     ///
@@ -365,6 +404,7 @@ impl Merger {
     pub fn create_versioned_release(&self, releases: &mut [Value]) -> Result<(Value, Vec<DuplicateIdWarning>), Error> {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
+        let multiple_releases = releases.len() > 1;
 
         for (index, release) in releases.iter_mut().enumerate() {
             if !release.is_object() {
@@ -372,19 +412,19 @@ impl Merger {
             }
 
             // Store the values of fields that set "omitWhenMerged": true.
-            // Prior to OCDS 1.1.4, `tag` didn't set "omitWhenMerged": true.
-            let ocid = release["ocid"].clone();
-            let date = release["date"].clone();
             let id = release["id"].clone();
-            let tag = release.as_object_mut().expect("Release is not an object").remove("tag");
+            let date = extract_date(release, index, multiple_releases)?;
+
+            let release_object = release.as_object_mut().expect("Release is not an object");
+            // Don't version the OCID. (Restore it after flattening.)
+            let ocid = release_object.remove("ocid").unwrap_or(Value::Null);
+            // Prior to OCDS 1.1.4, `tag` didn't set "omitWhenMerged": true.
+            let tag = release_object.remove("tag");
 
             let mut flat = IndexMap::new();
             self.flatten(&mut flat, &[], &mut vec![], true, release, &mut warnings);
 
-            // Don't version the OCID.
-            let path = vec![field!("ocid")];
-            flat.remove(&path);
-            flattened.insert(path, ocid);
+            flattened.insert(vec![field!("ocid")], ocid);
 
             for (key, value) in flat {
                 // If the value is unversioned, continue.

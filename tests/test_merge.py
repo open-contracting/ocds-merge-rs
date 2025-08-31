@@ -1,10 +1,10 @@
 # ocds-merge/tests/test_merge.py
 #
-# These tests are not present, because the Rust implementation doesn't sorted_releases, extend or append:
-# - test_sorted_releases_errors
-# - test_sorted_releases_key_error
+# These tests are not present, because the Rust implementation doesn't extend or append:
 # - test_extend
 # - test_appand
+#
+# test_sorted_releases_key_error is not present, because `create_exception!` doesn't support multiple inheritance.
 import json
 import re
 import warnings
@@ -14,8 +14,16 @@ from pathlib import Path
 import jsonref
 import pytest
 from ocdsmerge_rs import Merger
-from ocdsmerge_rs.exceptions import DuplicateIdValueWarning, InconsistentTypeError
-from tests import load, path, schema_url, tags
+from ocdsmerge_rs.exceptions import (
+    DuplicateIdValueWarning,
+    InconsistentTypeError,
+    MissingDateKeyError,
+    NonObjectReleaseError,
+    NonStringDateValueError,
+    NullDateValueError,
+)
+
+from tests import path, schema_url, tags
 
 
 def get_test_cases():
@@ -38,6 +46,61 @@ def get_test_cases():
             test_merge_argvalues += [(filename, schema) for filename in filenames]
 
     return test_merge_argvalues
+
+
+@pytest.mark.parametrize(
+    ("error", "data"),
+    [
+        (MissingDateKeyError, {}),
+        (NullDateValueError, {"date": None}),
+        (NonStringDateValueError, {"date": {}}),
+        (NonObjectReleaseError, "{}"),
+        (NonObjectReleaseError, b"{}"),
+        (NonObjectReleaseError, []),
+        (NonObjectReleaseError, ()),
+        (NonObjectReleaseError, set()),
+    ],
+)
+def test_date_errors(error, data, empty_merger):
+    for infix in ("compiled", "versioned"):
+        with pytest.raises(error):
+            getattr(empty_merger, f"create_{infix}_release")([{"date": "2010-01-01"}, data])
+
+    if not isinstance(data, dict):
+        with pytest.raises(error):
+            empty_merger.create_compiled_release([data])
+    else:
+        release = deepcopy(data)
+
+        expected = {
+            "id": f"None-{data.get('date')}",
+            "tag": ["compiled"],
+        }
+
+        if data.get("date") is not None:
+            expected["date"] = data["date"]
+
+        assert empty_merger.create_compiled_release([release]) == expected
+
+    if not isinstance(data, dict):
+        with pytest.raises(error):
+            empty_merger.create_versioned_release([data])
+    else:
+        release = deepcopy(data)
+        release["initiationType"] = "tender"
+
+        expected = {
+            "initiationType": [
+                {
+                    "releaseID": None,
+                    "releaseDate": data.get("date"),
+                    "releaseTag": None,
+                    "value": "tender",
+                }
+            ],
+        }
+
+        assert empty_merger.create_versioned_release([release]) == expected
 
 
 @pytest.mark.parametrize(("filename", "schema"), get_test_cases())

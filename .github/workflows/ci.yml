@@ -27,20 +27,13 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: uv venv -p ${{ matrix.python-version }}
       - run: uv pip install .[dev,test]
-      - if: matrix.os == 'windows-latest'
-        name: Run tests
-        run: |
-          cargo test
-          uv run pytest -W error
-      - if: matrix.os != 'windows-latest'
-        name: Run tests
+      - name: Run tests
         run: |
           eval $(cargo llvm-cov show-env --export-prefix)
           cargo test
           uv run maturin develop --uv
           uv run coverage run --source=ocdsmerge_rs -m pytest -W error
           cargo llvm-cov report --lcov --output-path .coverage
-      - if: matrix.os != 'windows-latest'
-        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5.5.1
+      - uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5.5.1
         with:
           fail_ci_if_error: true

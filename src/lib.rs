@@ -1,13 +1,19 @@
 use std::collections::HashMap;
+#[cfg(feature = "python")]
 use std::ffi::CString;
 
 use derivative::Derivative;
 use derive_more::Display;
 use indexmap::IndexMap;
+#[cfg(feature = "python")]
 use pyo3::PyTypeInfo;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::{PyDict, PyTuple};
+#[cfg(feature = "python")]
 use pythonize::depythonize;
+#[cfg(feature = "python")]
 use pythonize::pythonize;
 use serde_json::{Value, json};
 
@@ -23,6 +29,7 @@ macro_rules! field {
     };
 }
 
+#[cfg(feature = "python")]
 mod exceptions {
     use pyo3::create_exception;
 
@@ -37,20 +44,21 @@ mod exceptions {
     create_exception!(exceptions, DuplicateIdValueWarning, MergeWarning);
 }
 
+#[cfg(feature = "python")]
 use exceptions::{
     DuplicateIdValueWarning, InconsistentTypeError, MergeError, MergeWarning, MissingDateKeyError,
     NonObjectReleaseError, NonStringDateValueError, NullDateValueError, OutOfOrderReleaseError,
 };
 
 // The Rust implementation of OCDS Merge uses an enum instead of str.
-#[pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE")]
+#[cfg_attr(feature = "python", pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Rule {
     Omit,    // "omitWhenMerged"
     Replace, // "wholeListMerge"
 }
 
-#[pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE")]
+#[cfg_attr(feature = "python", pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Strategy {
     Append,
@@ -131,6 +139,7 @@ impl std::fmt::Display for Error {
     }
 }
 
+#[cfg(feature = "python")]
 impl From<Error> for PyErr {
     fn from(err: Error) -> Self {
         match err {
@@ -169,7 +178,7 @@ pub enum Id {
     String(String),
 }
 
-#[pyclass(frozen)]
+#[cfg_attr(feature = "python", pyclass(frozen))]
 #[derive(Default)]
 pub struct Merger {
     rules: HashMap<Vec<String>, Rule>,
@@ -217,6 +226,7 @@ fn ensure_order(previous_date: Option<&String>, current_date: &Value, index: usi
     Ok(())
 }
 
+#[cfg(feature = "python")]
 fn ensure_object(value: &Value, context: &str) -> PyResult<()> {
     if !value.is_object() {
         let actual_type = match value {
@@ -234,6 +244,7 @@ fn ensure_object(value: &Value, context: &str) -> PyResult<()> {
     Ok(())
 }
 
+#[cfg(feature = "python")]
 fn emit_warnings(py: Python<'_>, warnings: Vec<DuplicateIdWarning>) -> PyResult<()> {
     for warning in warnings {
         let message = format!(
@@ -256,6 +267,7 @@ fn emit_warnings(py: Python<'_>, warnings: Vec<DuplicateIdWarning>) -> PyResult<
 // - `get_rules` expects a dereferenced schema and doesn't accept a `str` value for a filename or a URL.
 // - `create_compiled_release` and `create_versioned_release` expect sorted releases and don't sort releases.
 // - `Merger` has no `extend` or `append` method.
+#[cfg(feature = "python")]
 #[pymethods]
 impl Merger {
     /// Initialize a reusable `Merger` instance for creating merged releases.
@@ -774,6 +786,7 @@ impl Merger {
     }
 }
 
+#[cfg(feature = "python")]
 #[pymodule(gil_used = false)]
 fn ocdsmerge_rs<'py>(py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> {
     m.add_class::<Merger>()?;

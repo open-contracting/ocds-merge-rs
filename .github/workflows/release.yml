@@ -63,7 +63,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo install cross --git https://github.com/cross-rs/cross
-      - run: ${{ matrix.command }} build --release --target ${{ matrix.target }}
+      - run: ${{ matrix.command }} build --release --target ${{ matrix.target }} --bin ocdsmerge --no-default-features
       # 7z is available on all runners.
       # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#preinstalled-software
       - name: Create archive

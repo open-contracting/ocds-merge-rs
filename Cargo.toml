@@ -21,14 +21,14 @@ derivative = "2.2"
 derive_more = { version = "2.0", features = ["display"] }
 fastrand = "1.9"
 indexmap = "1.9"
-pyo3 = { version = "0.26", features = ["extension-module"] }
-pythonize = "0.26"
+pyo3 = { version = "0.27", features = ["extension-module"] }
+pythonize = "0.27"
 serde = "1.0"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 
 [build-dependencies]
 glob = "0.3"
-pyo3-build-config = "0.26"
+pyo3-build-config = "0.27"
 
 [dev-dependencies]
 pretty_assertions = "1.0"

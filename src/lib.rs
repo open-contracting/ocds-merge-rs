@@ -280,7 +280,7 @@ impl Merger {
             .map(|obj| depythonize(&obj))
             .collect::<Result<Vec<Value>, _>>()?;
 
-        let (result, warnings) = py.allow_threads(|| self.create_compiled_release(&deserialized))?;
+        let (result, warnings) = py.detach(|| self.create_compiled_release(&deserialized))?;
         emit_warnings(py, warnings)?;
 
         Ok(pythonize(py, &result)?.into())
@@ -298,7 +298,7 @@ impl Merger {
             .map(|obj| depythonize(&obj))
             .collect::<Result<Vec<Value>, _>>()?;
 
-        let (result, warnings) = py.allow_threads(|| self.create_versioned_release(&mut deserialized))?;
+        let (result, warnings) = py.detach(|| self.create_versioned_release(&mut deserialized))?;
         emit_warnings(py, warnings)?;
 
         Ok(pythonize(py, &result)?.into())
@@ -311,7 +311,7 @@ impl Merger {
         let mut schema_value: Value = depythonize(schema)?;
         ensure_object(&schema_value, "Schema")?;
 
-        let result = py.allow_threads(|| {
+        let result = py.detach(|| {
             Self::dereference(&mut schema_value);
             schema_value
         });
@@ -332,7 +332,7 @@ impl Merger {
             .get("properties")
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyKeyError, _>("Schema must set 'properties'"))?;
 
-        let rules = py.allow_threads(|| Self::get_rules(properties, &[]));
+        let rules = py.detach(|| Self::get_rules(properties, &[]));
 
         // Same as `rules_py`.
         let dict = PyDict::new(py);

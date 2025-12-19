@@ -255,3 +255,41 @@ def test_create_versioned_release_mutate(simple_merger):
         {"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "tag": ["tender"]},
         {"ocid": "ocds-213czf-A", "id": "2", "date": "2000-01-02T00:00:00Z", "tag": ["tenderUpdate"]},
     ]
+
+
+def test_arbitrary_precision_greater_than_u64_max(empty_merger):
+    # u64::MAX + 1
+    data = [{"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "number": 18446744073709551616}]
+
+    result = empty_merger.create_compiled_release(data)
+
+    assert isinstance(result["number"], int)
+    assert result["number"] == 18446744073709551616
+
+
+def test_arbitrary_precision_less_than_i64_min(empty_merger):
+    # i64::MIN - 1
+    data = [{"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "number": -9223372036854775809}]
+
+    result = empty_merger.create_compiled_release(data)
+
+    assert isinstance(result["number"], int)
+    assert result["number"] == -9223372036854775809
+
+
+def test_arbitrary_precision_float(empty_merger):
+    data = [{"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "number": 3.141592653589793238}]
+
+    result = empty_merger.create_compiled_release(data)
+
+    assert isinstance(result["number"], float)
+    assert result["number"] == 3.141592653589793238
+
+
+def test_arbitrary_precision_int(empty_merger):
+    data = [{"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "number": 2}]
+
+    result = empty_merger.create_compiled_release(data)
+
+    assert isinstance(result["number"], int)
+    assert result["number"] == 2

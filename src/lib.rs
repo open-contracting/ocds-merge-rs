@@ -1070,5 +1070,60 @@ mod tests {
         assert_eq!(actual, read(path));
     }
 
+    // Test arbitrary precision number handling.
+    #[test]
+    fn arbitrary_precision_greater_than_u64_max() {
+        let merger = Merger::default();
+
+        let data_str = r#"[{
+            "ocid": "ocds-213czf-A",
+            "id": "1",
+            "date": "2000-01-01T00:00:00Z",
+            "number": 18446744073709551616
+        }]"#;
+
+        let data: Vec<Value> = serde_json::from_str(data_str).unwrap();
+        let (result, warnings) = merger.create_compiled_release(&data).unwrap();
+
+        assert_eq!(warnings, Vec::new());
+        assert_eq!(result["number"].to_string(), "18446744073709551616");
+    }
+
+    #[test]
+    fn arbitrary_precision_less_than_i64_min() {
+        let merger = Merger::default();
+
+        let data_str = r#"[{
+            "ocid": "ocds-213czf-A",
+            "id": "1",
+            "date": "2000-01-01T00:00:00Z",
+            "number": -9223372036854775809
+        }]"#;
+
+        let data: Vec<Value> = serde_json::from_str(data_str).unwrap();
+        let (result, warnings) = merger.create_compiled_release(&data).unwrap();
+
+        assert_eq!(warnings, Vec::new());
+        assert_eq!(result["number"].to_string(), "-9223372036854775809");
+    }
+
+    #[test]
+    fn arbitrary_precision_float() {
+        let merger = Merger::default();
+
+        let data_str = r#"[{
+            "ocid": "ocds-213czf-A",
+            "id": "1",
+            "date": "2000-01-01T00:00:00Z",
+            "number": 3.141592653589793238
+        }]"#;
+
+        let data: Vec<Value> = serde_json::from_str(data_str).unwrap();
+        let (result, warnings) = merger.create_compiled_release(&data).unwrap();
+
+        assert_eq!(warnings, Vec::new());
+        assert_eq!(result["number"].to_string(), "3.141592653589793238");
+    }
+
     include!(concat!(env!("OUT_DIR"), "/lib.include"));
 }

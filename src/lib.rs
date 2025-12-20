@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-#[cfg(feature = "python")]
-use std::ffi::CString;
 
 use derivative::Derivative;
 use derive_more::Display;
@@ -10,7 +8,7 @@ use pyo3::PyTypeInfo;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyDict, PyTuple, PyType};
 #[cfg(feature = "python")]
 use pythonize::depythonize;
 #[cfg(feature = "python")]
@@ -140,16 +138,56 @@ impl std::fmt::Display for Error {
 }
 
 #[cfg(feature = "python")]
-impl From<Error> for PyErr {
-    fn from(err: Error) -> Self {
-        match err {
-            Error::NonObjectRelease { .. } => NonObjectReleaseError::new_err(err.to_string()),
-            Error::InconsistentType { .. } => InconsistentTypeError::new_err(err.to_string()),
-            Error::MissingDateKey { .. } => MissingDateKeyError::new_err(err.to_string()),
-            Error::NullDateValue { .. } => NullDateValueError::new_err(err.to_string()),
-            Error::NonStringDateValue { .. } => NonStringDateValueError::new_err(err.to_string()),
-            Error::OutOfOrderRelease { .. } => OutOfOrderReleaseError::new_err(err.to_string()),
-        }
+fn error_to_pyerr(py: Python<'_>, err: Error) -> PyErr {
+    fn create_exc<F>(exc_type: &Bound<'_, PyType>, message: String, set_attrs: F) -> PyErr
+    where
+        F: FnOnce(&Bound<'_, PyAny>),
+    {
+        exc_type.call1((message,)).map_or_else(
+            |e| e,
+            |instance| {
+                set_attrs(&instance);
+                PyErr::from_value(instance)
+            },
+        )
+    }
+
+    let message = err.to_string();
+
+    match err {
+        Error::NonObjectRelease { index } => create_exc(&NonObjectReleaseError::type_object(py), message, |inst| {
+            let _ = inst.setattr("index", index);
+        }),
+        Error::InconsistentType {
+            path,
+            previous,
+            current,
+        } => create_exc(&InconsistentTypeError::type_object(py), message, |inst| {
+            let path_str = path.iter().map(ToString::to_string).collect::<Vec<_>>().join("/");
+            let _ = inst.setattr("path", path_str);
+            if let Ok(value) = pythonize(py, &previous) {
+                let _ = inst.setattr("previous", value);
+            }
+            let _ = inst.setattr("current", current);
+        }),
+        Error::MissingDateKey { index } => create_exc(&MissingDateKeyError::type_object(py), message, |inst| {
+            let _ = inst.setattr("index", index);
+        }),
+        Error::NullDateValue { index } => create_exc(&NullDateValueError::type_object(py), message, |inst| {
+            let _ = inst.setattr("index", index);
+        }),
+        Error::NonStringDateValue { index } => create_exc(&NonStringDateValueError::type_object(py), message, |inst| {
+            let _ = inst.setattr("index", index);
+        }),
+        Error::OutOfOrderRelease {
+            index,
+            previous,
+            current,
+        } => create_exc(&OutOfOrderReleaseError::type_object(py), message, |inst| {
+            let _ = inst.setattr("index", index);
+            let _ = inst.setattr("previous", previous);
+            let _ = inst.setattr("current", current);
+        }),
     }
 }
 
@@ -246,17 +284,20 @@ fn ensure_object(value: &Value, context: &str) -> PyResult<()> {
 
 #[cfg(feature = "python")]
 fn emit_warnings(py: Python<'_>, warnings: Vec<DuplicateIdWarning>) -> PyResult<()> {
+    let warnings_module = py.import("warnings")?;
+    let warning_type = DuplicateIdValueWarning::type_object(py);
+
     for warning in warnings {
         let message = format!(
             "Multiple objects have the `id` value '{}' in the `{}` array",
             warning.id, warning.path
         );
-        PyErr::warn(
-            py,
-            &DuplicateIdValueWarning::type_object(py),
-            &CString::new(message)?,
-            2,
-        )?;
+
+        let warning_instance = warning_type.call1((message,))?;
+        warning_instance.setattr("id", warning.id.clone())?;
+        warning_instance.setattr("path", warning.path.clone())?;
+
+        warnings_module.call_method1("warn", (warning_instance,))?;
     }
     Ok(())
 }
@@ -292,7 +333,9 @@ impl Merger {
             .map(|obj| depythonize(&obj))
             .collect::<Result<Vec<Value>, _>>()?;
 
-        let (result, warnings) = py.detach(|| self.create_compiled_release(&deserialized))?;
+        let (result, warnings) = py
+            .detach(|| self.create_compiled_release(&deserialized))
+            .map_err(|e| error_to_pyerr(py, e))?;
         emit_warnings(py, warnings)?;
 
         Ok(pythonize(py, &result)?.into())
@@ -310,7 +353,9 @@ impl Merger {
             .map(|obj| depythonize(&obj))
             .collect::<Result<Vec<Value>, _>>()?;
 
-        let (result, warnings) = py.detach(|| self.create_versioned_release(&mut deserialized))?;
+        let (result, warnings) = py
+            .detach(|| self.create_versioned_release(&mut deserialized))
+            .map_err(|e| error_to_pyerr(py, e))?;
         emit_warnings(py, warnings)?;
 
         Ok(pythonize(py, &result)?.into())

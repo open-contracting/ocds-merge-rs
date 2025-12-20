@@ -144,6 +144,7 @@ def test_inconsistent_type_object_last(value, infix, empty_merger):
         str(excinfo.value)
         == f"An earlier release had {infix} for /integer, but the current release has an object with a 'object' key"
     )
+    assert vars(excinfo.value) == {"path": "integer", "previous": value, "current": "an object with a 'object' key"}
 
 
 def test_inconsistent_type_object_first(empty_merger):
@@ -158,6 +159,7 @@ def test_inconsistent_type_object_first(empty_merger):
     assert (
         str(excinfo.value) == 'An earlier release had {"object":1} for /integer, but the current release has an array'
     )
+    assert vars(excinfo.value) == {"path": "integer", "previous": {"object": 1}, "current": "an array"}
 
 
 @pytest.mark.parametrize("method", ["compiled", "versioned"])
@@ -174,6 +176,7 @@ def test_out_of_order_releases(method, empty_merger):
         str(excinfo.value)
         == "Release at index 1 has date '2020-01-02T00:00:00Z' which is less than the previous '2020-01-03T00:00:00Z'"
     )
+    assert vars(excinfo.value) == {"index": 1, "previous": "2020-01-03T00:00:00Z", "current": "2020-01-02T00:00:00Z"}
 
 
 @pytest.mark.parametrize(("i", "j"), [(0, 0), (0, 1), (1, 0), (1, 1)])

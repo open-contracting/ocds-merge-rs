@@ -21,6 +21,7 @@ def test_warn(empty_merger):
 
     for i, record in enumerate(records):
         assert str(record.message) == string.format(fields[i])
+        assert vars(record.message) == {"id": "1", "path": f"nested.{fields[i]}"}
 
 
 def test_raise(empty_merger):
@@ -30,6 +31,7 @@ def test_raise(empty_merger):
             empty_merger.create_compiled_release(releases)
 
     assert str(excinfo.value) == "Multiple objects have the `id` value '1' in the `nested.identifierMerge` array"
+    assert vars(excinfo.value) == {"id": "1", "path": "nested.identifierMerge"}
 
 
 def test_ignore(empty_merger):
@@ -55,6 +57,7 @@ def test_merge_by_position():
 
     for i, record in enumerate(records):
         assert str(record.message) == string.format(fields[i])
+        assert vars(record.message) == {"id": "1", "path": f"nested.{fields[i]}"}
 
 
 def test_append():
@@ -72,6 +75,7 @@ def test_append():
 
     for i, record in enumerate(records):
         assert str(record.message) == string.format(fields[i])
+        assert vars(record.message) == {"id": "1", "path": f"nested.{fields[i]}"}
 
 
 def test_append_no_id():

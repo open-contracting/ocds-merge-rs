@@ -40,12 +40,14 @@ mod exceptions {
     create_exception!(exceptions, OutOfOrderReleaseError, MergeError);
     create_exception!(exceptions, MergeWarning, pyo3::exceptions::PyUserWarning);
     create_exception!(exceptions, DuplicateIdValueWarning, MergeWarning);
+    create_exception!(exceptions, RepeatedDateValueWarning, MergeWarning);
 }
 
 #[cfg(feature = "python")]
 use exceptions::{
     DuplicateIdValueWarning, InconsistentTypeError, MergeError, MergeWarning, MissingDateKeyError,
     NonObjectReleaseError, NonStringDateValueError, NullDateValueError, OutOfOrderReleaseError,
+    RepeatedDateValueWarning,
 };
 
 // The Rust implementation of OCDS Merge uses an enum instead of str.
@@ -88,11 +90,13 @@ pub enum Error {
     },
 }
 
-/// Raised when multiple objects have the same ID value in an array.
+/// Warning types for merging releases.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct DuplicateIdWarning {
-    pub id: String,
-    pub path: String,
+pub enum Warning {
+    /// Raised when multiple objects have the same ID value in an array.
+    DuplicateId { id: String, path: String },
+    /// Raised when multiple releases have the same date value.
+    RepeatedDate { date: String, index: usize },
 }
 
 impl std::error::Error for Error {}
@@ -250,18 +254,25 @@ fn extract_date(release: &Value, index: usize, multiple_releases: bool) -> Resul
     }
 }
 
-fn ensure_order(previous_date: Option<&String>, current_date: &Value, index: usize) -> Result<(), Error> {
+fn ensure_order(previous_date: Option<&String>, current_date: &Value, index: usize) -> Result<Vec<Warning>, Error> {
+    let mut warnings = Vec::new();
     if let Some(previous) = previous_date
         && let Value::String(current) = current_date
-        && current < previous
     {
-        return Err(Error::OutOfOrderRelease {
-            index,
-            previous: previous.clone(),
-            current: current.clone(),
-        });
+        if current < previous {
+            return Err(Error::OutOfOrderRelease {
+                index,
+                previous: previous.clone(),
+                current: current.clone(),
+            });
+        } else if current == previous {
+            warnings.push(Warning::RepeatedDate {
+                date: current.clone(),
+                index,
+            });
+        }
     }
-    Ok(())
+    Ok(warnings)
 }
 
 #[cfg(feature = "python")]
@@ -283,21 +294,32 @@ fn ensure_object(value: &Value, context: &str) -> PyResult<()> {
 }
 
 #[cfg(feature = "python")]
-fn emit_warnings(py: Python<'_>, warnings: Vec<DuplicateIdWarning>) -> PyResult<()> {
+fn emit_warnings(py: Python<'_>, warnings: Vec<Warning>) -> PyResult<()> {
     let warnings_module = py.import("warnings")?;
-    let warning_type = DuplicateIdValueWarning::type_object(py);
 
     for warning in warnings {
-        let message = format!(
-            "Multiple objects have the `id` value '{}' in the `{}` array",
-            warning.id, warning.path
-        );
+        match warning {
+            Warning::DuplicateId { id, path } => {
+                let warning_type = DuplicateIdValueWarning::type_object(py);
+                let message = format!("Multiple objects have the `id` value '{id}' in the `{path}` array");
 
-        let warning_instance = warning_type.call1((message,))?;
-        warning_instance.setattr("id", warning.id.clone())?;
-        warning_instance.setattr("path", warning.path.clone())?;
+                let warning_instance = warning_type.call1((message,))?;
+                warning_instance.setattr("id", id)?;
+                warning_instance.setattr("path", path)?;
 
-        warnings_module.call_method1("warn", (warning_instance,))?;
+                warnings_module.call_method1("warn", (warning_instance,))?;
+            }
+            Warning::RepeatedDate { date, index } => {
+                let warning_type = RepeatedDateValueWarning::type_object(py);
+                let message = format!("Release at index {index} has the same date '{date}' as the previous release");
+
+                let warning_instance = warning_type.call1((message,))?;
+                warning_instance.setattr("date", date)?;
+                warning_instance.setattr("index", index)?;
+
+                warnings_module.call_method1("warn", (warning_instance,))?;
+            }
+        }
     }
     Ok(())
 }
@@ -433,7 +455,7 @@ impl Merger {
     /// - A release is not an object
     /// - A path is a literal, an object, and/or an array in different releases
     /// - A release has a missing, null, or non-string `date` value, when merging multiple releases
-    pub fn create_compiled_release(&self, releases: &[Value]) -> Result<(Value, Vec<DuplicateIdWarning>), Error> {
+    pub fn create_compiled_release(&self, releases: &[Value]) -> Result<(Value, Vec<Warning>), Error> {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
         let multiple_releases = releases.len() > 1;
@@ -450,7 +472,7 @@ impl Merger {
             let date = extract_date(release, index, multiple_releases)?;
 
             if multiple_releases {
-                ensure_order(previous_date.as_ref(), &date, index)?;
+                warnings.extend(ensure_order(previous_date.as_ref(), &date, index)?);
                 if let Value::String(string) = &date {
                     previous_date = Some(string.clone());
                 }
@@ -498,7 +520,7 @@ impl Merger {
     ///
     /// Panics if a release that passed the object check cannot be converted to an object.
     /// This should not happen under normal circumstances.
-    pub fn create_versioned_release(&self, releases: &mut [Value]) -> Result<(Value, Vec<DuplicateIdWarning>), Error> {
+    pub fn create_versioned_release(&self, releases: &mut [Value]) -> Result<(Value, Vec<Warning>), Error> {
         let mut flattened = IndexMap::new();
         let mut warnings = Vec::new();
         let multiple_releases = releases.len() > 1;
@@ -514,7 +536,7 @@ impl Merger {
             let date = extract_date(release, index, multiple_releases)?;
 
             if multiple_releases {
-                ensure_order(previous_date.as_ref(), &date, index)?;
+                warnings.extend(ensure_order(previous_date.as_ref(), &date, index)?);
                 if let Value::String(string) = &date {
                     previous_date = Some(string.clone());
                 }
@@ -637,7 +659,7 @@ impl Merger {
         rule_path: &mut Vec<String>,
         versioned: bool,
         json: &Value,
-        warnings: &mut Vec<DuplicateIdWarning>,
+        warnings: &mut Vec<Warning>,
     ) {
         match json {
             Value::Array(vec) => {
@@ -683,7 +705,7 @@ impl Merger {
 
                         // Check whether the identifier is used by other objects in the array.
                         if *identifiers.entry(join!(path, &default_key)).or_insert(index) != index {
-                            warnings.push(DuplicateIdWarning {
+                            warnings.push(Warning::DuplicateId {
                                 id: default_key.to_string(),
                                 path: rule_path.join("."),
                             });
@@ -721,7 +743,7 @@ impl Merger {
         versioned: bool,
         key: &Part,
         value: &Value,
-        warnings: &mut Vec<DuplicateIdWarning>,
+        warnings: &mut Vec<Warning>,
     ) {
         match self.rules.get(rule_path) {
             Some(Rule::Omit) => {}
@@ -846,6 +868,7 @@ fn ocdsmerge_rs<'py>(py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> 
     m.add("OutOfOrderReleaseError", py.get_type::<OutOfOrderReleaseError>())?;
     m.add("MergeWarning", py.get_type::<MergeWarning>())?;
     m.add("DuplicateIdValueWarning", py.get_type::<DuplicateIdValueWarning>())?;
+    m.add("RepeatedDateValueWarning", py.get_type::<RepeatedDateValueWarning>())?;
     Ok(())
 }
 

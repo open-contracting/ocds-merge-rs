@@ -3,7 +3,7 @@ import warnings
 
 import pytest
 from ocdsmerge_rs import Merger, Strategy
-from ocdsmerge_rs.exceptions import DuplicateIdValueWarning
+from ocdsmerge_rs.exceptions import DuplicateIdValueWarning, RepeatedDateValueWarning
 
 from tests import load
 
@@ -48,11 +48,13 @@ def test_merge_by_position():
 
     merger = Merger(overrides={("nested", "array"): Strategy.MERGE_BY_POSITION})
 
-    with pytest.warns(DuplicateIdValueWarning) as records:
+    with warnings.catch_warnings(record=True) as wlist:
+        warnings.simplefilter("always")
         compiled_release = merger.create_compiled_release(releases + releases)
 
     assert compiled_release == load("schema", "identifier-merge-duplicate-id-by-position.json")
 
+    records = [w for w in wlist if issubclass(w.category, DuplicateIdValueWarning)]
     assert len(records) == 4
 
     for i, record in enumerate(records):
@@ -66,11 +68,13 @@ def test_append():
 
     merger = Merger(overrides={("nested", "array"): Strategy.APPEND})
 
-    with pytest.warns(DuplicateIdValueWarning) as records:
+    with warnings.catch_warnings(record=True) as wlist:
+        warnings.simplefilter("always")
         compiled_release = merger.create_compiled_release(releases + releases)
 
     assert compiled_release == load("schema", "identifier-merge-duplicate-id-append.json")
 
+    records = [w for w in wlist if issubclass(w.category, DuplicateIdValueWarning)]
     assert len(records) == 4
 
     for i, record in enumerate(records):
@@ -84,6 +88,7 @@ def test_append_no_id():
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # no unexpected warnings
+        warnings.filterwarnings("ignore", category=RepeatedDateValueWarning)
 
         compiled_release = merger.create_compiled_release(data + data)
 

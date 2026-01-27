@@ -17,6 +17,7 @@ pip install ocdsmerge_rs
 :caption: Contents
 :maxdepth: 2
 
+api/index
 changelog
 :::
 

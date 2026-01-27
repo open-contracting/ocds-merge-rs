@@ -22,6 +22,9 @@ release = version
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
+    "sphinx.ext.autodoc",
+    "sphinx.ext.intersphinx",
+    "sphinx.ext.viewcode",
     "myst_parser",
 ]
 
@@ -35,5 +38,16 @@ html_theme = "furo"
 html_static_path = []
 
 # -- Extension configuration -------------------------------------------------
+
+autodoc_default_options = {
+    "members": None,
+    "member-order": "bysource",
+}
+autodoc_typehints = "description"
+autodoc_type_aliases = {}
+
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+}
 
 myst_enable_extensions = ["colon_fence"]

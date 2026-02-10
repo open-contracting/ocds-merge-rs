@@ -290,7 +290,6 @@ def test_arbitrary_precision_float(empty_merger):
 
 
 def test_arbitrary_precision_greater_than_u128_max(empty_merger):
-    # u64::MAX + 1
     data = [{"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "number": 1.23e100}]
 
     result = empty_merger.create_compiled_release(data)

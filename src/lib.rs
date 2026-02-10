@@ -1193,5 +1193,23 @@ mod tests {
         assert_eq!(result["number"].to_string(), "3.141592653589793238");
     }
 
+    #[test]
+    fn arbitrary_precision_greater_than_u128_max() {
+        let merger = Merger::default();
+
+        let data_str = r#"[{
+            "ocid": "ocds-213czf-A",
+            "id": "1",
+            "date": "2000-01-01T00:00:00Z",
+            "number": 1.23e+100
+        }]"#;
+
+        let data: Vec<Value> = serde_json::from_str(data_str).unwrap();
+        let (result, warnings) = merger.create_compiled_release(&data).unwrap();
+
+        assert_eq!(warnings, Vec::new());
+        assert_eq!(result["number"].to_string(), "1.23e+100");
+    }
+
     include!(concat!(env!("OUT_DIR"), "/lib.include"));
 }

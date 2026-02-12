@@ -280,6 +280,17 @@ def test_arbitrary_precision_less_than_i64_min(empty_merger):
     assert result["number"] == -9223372036854775809
 
 
+def test_arbitrary_precision_greater_than_u128_max(empty_merger):
+    # u128::MAX + 1
+    number = 340282366920938463463374607431768211456
+    data = [{"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "number": number}]
+
+    result = empty_merger.create_compiled_release(data)
+
+    assert isinstance(result["number"], float)
+    assert result["number"] == number
+
+
 def test_arbitrary_precision_float(empty_merger):
     data = [{"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "number": 3.141592653589793238}]
 
@@ -287,15 +298,6 @@ def test_arbitrary_precision_float(empty_merger):
 
     assert isinstance(result["number"], float)
     assert result["number"] == 3.141592653589793238
-
-
-def test_arbitrary_precision_greater_than_u128_max(empty_merger):
-    data = [{"ocid": "ocds-213czf-A", "id": "1", "date": "2000-01-01T00:00:00Z", "number": 1.23e100}]
-
-    result = empty_merger.create_compiled_release(data)
-
-    assert isinstance(result["number"], float)
-    assert result["number"] == 1.23e100
 
 
 def test_arbitrary_precision_int(empty_merger):

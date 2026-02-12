@@ -287,7 +287,7 @@ def test_arbitrary_precision_greater_than_u128_max(empty_merger):
 
     result = empty_merger.create_compiled_release(data)
 
-    assert isinstance(result["number"], float)
+    assert isinstance(result["number"], int)
     assert result["number"] == number
 
 

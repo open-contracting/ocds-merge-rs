@@ -1,6 +1,6 @@
 [package]
 name = "ocdsmerge"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["Open Contracting Partnership <data@open-contracting.org>"]
 edition = "2024"
 description = "Merges JSON texts conforming to the Open Contracting Data Standard."

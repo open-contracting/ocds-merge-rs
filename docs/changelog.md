@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4 (2026-02-11)
+
+- fix: Fix large integers from Python to Rust.
+
 ## 0.1.3 (2026-01-07)
 
 - feat: Add RepeatedDateValueWarning for when releases lack a stable order.

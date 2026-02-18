@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5 (2026-02-18)
+
+- Upgrade pythonize 0.28.
+
 ## 0.1.4 (2026-02-11)
 
 - fix: Fix large integers from Python to Rust.

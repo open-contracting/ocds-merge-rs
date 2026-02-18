@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "ocdsmerge_rs"
-version = "0.1.4"
+version = "0.1.5"
 authors = [{name = "Open Contracting Partnership", email = "data@open-contracting.org"}]
 description = "Merges JSON texts conforming to the Open Contracting Data Standard"
 readme = "README.md"

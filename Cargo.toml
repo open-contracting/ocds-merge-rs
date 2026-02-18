@@ -1,6 +1,6 @@
 [package]
 name = "ocdsmerge"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["Open Contracting Partnership <data@open-contracting.org>"]
 edition = "2024"
 description = "Merges JSON texts conforming to the Open Contracting Data Standard."
@@ -22,7 +22,7 @@ derive_more = { version = "2.0", features = ["display"] }
 fastrand = "1.9"
 indexmap = "1.9"
 pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
-pythonize = { version = "0.27", features = ["arbitrary_precision"], optional = true }
+pythonize = { version = "0.28", features = ["arbitrary_precision"], optional = true }
 serde = "1.0"
 serde_json = { version = "1.0", features = ["preserve_order", "arbitrary_precision"] }
 
@@ -36,6 +36,3 @@ pretty_assertions = "1.0"
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3-build-config", "pythonize"]
-
-[patch.crates-io]
-pythonize = { git = "https://github.com/jpmckinney/pythonize.git", branch = "arbitrary_precision" }

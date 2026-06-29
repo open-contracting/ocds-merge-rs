@@ -479,7 +479,7 @@ impl Merger {
             }
 
             let mut flat = IndexMap::new();
-            self.flatten(&mut flat, &[], &mut vec![], false, release, &mut warnings);
+            self.flatten(&mut flat, &mut Vec::new(), &mut vec![], false, release, &mut warnings);
 
             let date_str = match &date {
                 Value::String(s) => s,
@@ -549,7 +549,7 @@ impl Merger {
             let tag = release_object.remove("tag");
 
             let mut flat = IndexMap::new();
-            self.flatten(&mut flat, &[], &mut vec![], true, release, &mut warnings);
+            self.flatten(&mut flat, &mut Vec::new(), &mut vec![], true, release, &mut warnings);
 
             flattened.insert(vec![field!("ocid")], ocid);
 
@@ -655,7 +655,7 @@ impl Merger {
     fn flatten(
         &self,
         flattened: &mut IndexMap<Vec<Part>, Value>,
-        path: &[Part],
+        path: &mut Vec<Part>,
         rule_path: &mut Vec<String>,
         versioned: bool,
         json: &Value,
@@ -663,8 +663,9 @@ impl Merger {
     ) {
         match json {
             Value::Array(vec) => {
-                // This tracks the identifiers of objects in an array, to warn about collisions.
-                let mut identifiers: HashMap<Vec<Part>, usize> = HashMap::new();
+                // This tracks the identifiers of objects in an array, to warn about collisions. Every entry is at the
+                // same `path`, so the identifier alone is a sufficient key.
+                let mut identifiers: HashMap<Id, usize> = HashMap::new();
 
                 for (index, value) in vec.iter().enumerate() {
                     if let Value::Object(map) = value {
@@ -685,11 +686,13 @@ impl Merger {
                             (None, Id::Integer(fastrand::i64(..)))
                         };
 
-                        // Calculate the key for checking for collisions using the identifier merge strategy.
-                        let default_key = Part::Identifier {
-                            id,
-                            original: original.cloned(),
-                        };
+                        // Check whether the identifier is used by other objects in the array.
+                        if *identifiers.entry(id.clone()).or_insert(index) != index {
+                            warnings.push(Warning::DuplicateId {
+                                id: id.to_string(),
+                                path: rule_path.join("."),
+                            });
+                        }
 
                         let key = match self.overrides.get(rule_path) {
                             Some(Strategy::Append) => Part::Identifier {
@@ -700,18 +703,13 @@ impl Merger {
                                 id: Id::Integer(index.try_into().unwrap()), // panics if array too long
                                 original: original.cloned(),
                             },
-                            None => default_key.clone(),
+                            None => Part::Identifier {
+                                id,
+                                original: original.cloned(),
+                            },
                         };
 
-                        // Check whether the identifier is used by other objects in the array.
-                        if *identifiers.entry(join!(path, &default_key)).or_insert(index) != index {
-                            warnings.push(Warning::DuplicateId {
-                                id: default_key.to_string(),
-                                path: rule_path.join("."),
-                            });
-                        }
-
-                        self.flatten_key_value(flattened, path, rule_path, versioned, &key, value, warnings);
+                        self.flatten_key_value(flattened, path, rule_path, versioned, key, value, warnings);
                     }
                 }
             }
@@ -723,7 +721,7 @@ impl Merger {
                         path,
                         rule_path,
                         versioned,
-                        &Part::Field(key.clone()),
+                        Part::Field(key.clone()),
                         value,
                         warnings,
                     );
@@ -738,10 +736,10 @@ impl Merger {
     fn flatten_key_value(
         &self,
         flattened: &mut IndexMap<Vec<Part>, Value>,
-        path: &[Part],
+        path: &mut Vec<Part>,
         rule_path: &mut Vec<String>,
         versioned: bool,
-        key: &Part,
+        key: Part,
         value: &Value,
         warnings: &mut Vec<Warning>,
     ) {
@@ -749,7 +747,9 @@ impl Merger {
             Some(Rule::Omit) => {}
             // If it's `wholeListMerge` ...
             Some(Rule::Replace) => {
-                flattened.insert(join!(path, key), value.clone());
+                path.push(key);
+                flattened.insert(path.clone(), value.clone());
+                path.pop();
             }
             None => {
                 // Or if it's neither an object nor an array ...
@@ -773,12 +773,16 @@ impl Merger {
                     )
                 {
                     // ... then use the whole list merge strategy.
-                    flattened.insert(join!(path, key), value.clone());
+                    path.push(key);
+                    flattened.insert(path.clone(), value.clone());
+                    path.pop();
                 // Recurse into non-empty objects, and non-empty arrays of objects that aren't `wholeListMerge`.
                 } else if matches!(value, Value::Object(map) if !map.is_empty())
                     || matches!(value, Value::Array(vec) if !vec.is_empty())
                 {
-                    self.flatten(flattened, &join!(path, key), rule_path, versioned, value, warnings);
+                    path.push(key);
+                    self.flatten(flattened, path, rule_path, versioned, value, warnings);
+                    path.pop();
                 }
             }
         }
@@ -932,7 +936,14 @@ mod tests {
             ]
         });
 
-        merger.flatten(&mut flattened, &[], &mut vec![], false, &item, &mut warnings);
+        merger.flatten(
+            &mut flattened,
+            &mut Vec::new(),
+            &mut vec![],
+            false,
+            &item,
+            &mut warnings,
+        );
 
         assert_eq!(
             flattened,
@@ -968,7 +979,14 @@ mod tests {
             ]
         });
 
-        merger.flatten(&mut flattened, &[], &mut vec![], false, &item, &mut warnings);
+        merger.flatten(
+            &mut flattened,
+            &mut Vec::new(),
+            &mut vec![],
+            false,
+            &item,
+            &mut warnings,
+        );
 
         assert_eq!(
             flattened,

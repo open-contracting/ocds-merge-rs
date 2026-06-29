@@ -51,14 +51,20 @@ use exceptions::{
 };
 
 // The Rust implementation of OCDS Merge uses an enum instead of str.
-#[cfg_attr(feature = "python", pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE"))]
+#[cfg_attr(
+    feature = "python",
+    pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE", from_py_object)
+)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Rule {
     Omit,    // "omitWhenMerged"
     Replace, // "wholeListMerge"
 }
 
-#[cfg_attr(feature = "python", pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE"))]
+#[cfg_attr(
+    feature = "python",
+    pyclass(eq, eq_int, rename_all = "SCREAMING_SNAKE_CASE", from_py_object)
+)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Strategy {
     Append,

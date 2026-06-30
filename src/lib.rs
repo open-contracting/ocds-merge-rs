@@ -1303,14 +1303,15 @@ mod tests {
             "ocid": "ocds-213czf-A",
             "id": "1",
             "date": "2000-01-01T00:00:00Z",
-            "parties": [{"id": null, "name": "Acme Inc."}],
+            "parties": [{"id": null, "name": "Acme Inc."}, {"id": null, "name": "Beta LLC"}],
         })];
 
-        // A null value removes the field when merging, so the party is treated as having no `id`.
+        // A null value removes the field when merging, so each party is treated as having no `id`: they get
+        // distinct keys (no collision warning) rather than colliding on a shared "null" identifier.
         let (result, warnings) = merger.create_compiled_release(&data).unwrap();
 
         assert_eq!(warnings, Vec::new());
-        assert_eq!(result["parties"], json!([{"name": "Acme Inc."}]));
+        assert_eq!(result["parties"], json!([{"name": "Acme Inc."}, {"name": "Beta LLC"}]));
     }
 
     include!(concat!(env!("OUT_DIR"), "/lib.include"));

@@ -37,6 +37,7 @@ mod exceptions {
     create_exception!(exceptions, MissingDateKeyError, MergeError);
     create_exception!(exceptions, NullDateValueError, MergeError);
     create_exception!(exceptions, NonStringDateValueError, MergeError);
+    create_exception!(exceptions, NonStringNonNumberIdValueError, MergeError);
     create_exception!(exceptions, OutOfOrderReleaseError, MergeError);
     create_exception!(exceptions, MergeWarning, pyo3::exceptions::PyUserWarning);
     create_exception!(exceptions, DuplicateIdValueWarning, MergeWarning);
@@ -46,8 +47,8 @@ mod exceptions {
 #[cfg(feature = "python")]
 use exceptions::{
     DuplicateIdValueWarning, InconsistentTypeError, MergeError, MergeWarning, MissingDateKeyError,
-    NonObjectReleaseError, NonStringDateValueError, NullDateValueError, OutOfOrderReleaseError,
-    RepeatedDateValueWarning,
+    NonObjectReleaseError, NonStringDateValueError, NonStringNonNumberIdValueError, NullDateValueError,
+    OutOfOrderReleaseError, RepeatedDateValueWarning,
 };
 
 // The Rust implementation of OCDS Merge uses an enum instead of str.
@@ -88,6 +89,8 @@ pub enum Error {
     NullDateValue { index: usize },
     /// Raised when a release has a non-string 'date' value.
     NonStringDateValue { index: usize },
+    /// Raised when an object in an array has an `id` value that is not a string or number.
+    NonStringNonNumberIdValue { path: String },
     /// Raised when a release is out of order (by ascending date).
     OutOfOrderRelease {
         index: usize,
@@ -132,6 +135,12 @@ impl std::fmt::Display for Error {
             }
             Self::NonStringDateValue { index } => {
                 write!(f, "Release at index {index} has a non-string `date` value")
+            }
+            Self::NonStringNonNumberIdValue { path } => {
+                write!(
+                    f,
+                    "An object in the /{path} array has an `id` value that is not a string or number"
+                )
             }
             Self::OutOfOrderRelease {
                 index,
@@ -189,6 +198,11 @@ fn error_to_pyerr(py: Python<'_>, err: Error) -> PyErr {
         Error::NonStringDateValue { index } => create_exc(&NonStringDateValueError::type_object(py), message, |inst| {
             let _ = inst.setattr("index", index);
         }),
+        Error::NonStringNonNumberIdValue { path } => {
+            create_exc(&NonStringNonNumberIdValueError::type_object(py), message, |inst| {
+                let _ = inst.setattr("path", path);
+            })
+        }
         Error::OutOfOrderRelease {
             index,
             previous,
@@ -485,7 +499,7 @@ impl Merger {
             }
 
             let mut flat = IndexMap::new();
-            self.flatten(&mut flat, &mut Vec::new(), &mut vec![], false, release, &mut warnings);
+            self.flatten(&mut flat, &mut Vec::new(), &mut vec![], false, release, &mut warnings)?;
 
             let date_str = match &date {
                 Value::String(s) => s,
@@ -555,7 +569,7 @@ impl Merger {
             let tag = release_object.remove("tag");
 
             let mut flat = IndexMap::new();
-            self.flatten(&mut flat, &mut Vec::new(), &mut vec![], true, release, &mut warnings);
+            self.flatten(&mut flat, &mut Vec::new(), &mut vec![], true, release, &mut warnings)?;
 
             flattened.insert(vec![field!("ocid")], ocid);
 
@@ -666,30 +680,33 @@ impl Merger {
         versioned: bool,
         json: &Value,
         warnings: &mut Vec<Warning>,
-    ) {
+    ) -> Result<(), Error> {
         match json {
             Value::Array(vec) => {
-                // This tracks the identifiers of objects in an array, to warn about collisions. Every entry is at the
-                // same `path`, so the identifier alone is a sufficient key.
+                // This tracks the identifiers of objects in an array, to warn about collisions.
                 let mut identifiers: HashMap<Id, usize> = HashMap::new();
 
                 for (index, value) in vec.iter().enumerate() {
                     if let Value::Object(map) = value {
                         // If the object has an `id` field, get its value, to apply the identifier merge strategy.
-                        let (original, id) = if map.contains_key("id") {
-                            (
+                        let (original, id) = match map.get("id") {
+                            Some(Value::String(string)) => (Some(&map["id"]), Id::String(string.clone())),
+                            // A number that isn't an i64 (a float or out-of-range integer) is used as a string.
+                            Some(Value::Number(number)) => (
                                 Some(&map["id"]),
-                                match &map["id"] {
-                                    Value::String(string) => Id::String(string.clone()),
-                                    Value::Number(number) => Id::Integer(
-                                        number.as_i64().expect("\"id\" is not an integer or is out of bounds"),
-                                    ),
-                                    _ => panic!("\"id\" is not a string or number"),
-                                },
-                            )
-                        // If the object has no `id` field, set a default unique value.
-                        } else {
-                            (None, Id::Integer(fastrand::i64(..)))
+                                number
+                                    .as_i64()
+                                    .map_or_else(|| Id::String(number.to_string()), Id::Integer),
+                            ),
+                            // A null value removes the field when merging, so treat a null `id` like a missing `id`.
+                            // If the object has no `id` field, set a default unique value.
+                            None | Some(Value::Null) => (None, Id::Integer(fastrand::i64(..))),
+                            // A boolean, array or object is not a valid `id` value.
+                            Some(_) => {
+                                return Err(Error::NonStringNonNumberIdValue {
+                                    path: rule_path.join("."),
+                                });
+                            }
                         };
 
                         // Check whether the identifier is used by other objects in the array.
@@ -715,7 +732,7 @@ impl Merger {
                             },
                         };
 
-                        self.flatten_key_value(flattened, path, rule_path, versioned, key, value, warnings);
+                        self.flatten_key_value(flattened, path, rule_path, versioned, key, value, warnings)?;
                     }
                 }
             }
@@ -730,12 +747,14 @@ impl Merger {
                         Part::Field(key.clone()),
                         value,
                         warnings,
-                    );
+                    )?;
                     rule_path.pop();
                 }
             }
             _ => unreachable!(),
         }
+
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -748,7 +767,7 @@ impl Merger {
         key: Part,
         value: &Value,
         warnings: &mut Vec<Warning>,
-    ) {
+    ) -> Result<(), Error> {
         match self.rules.get(rule_path) {
             Some(Rule::Omit) => {}
             // If it's `wholeListMerge` ...
@@ -787,11 +806,13 @@ impl Merger {
                     || matches!(value, Value::Array(vec) if !vec.is_empty())
                 {
                     path.push(key);
-                    self.flatten(flattened, path, rule_path, versioned, value, warnings);
+                    self.flatten(flattened, path, rule_path, versioned, value, warnings)?;
                     path.pop();
                 }
             }
         }
+
+        Ok(())
     }
 
     fn unflatten(flattened: &IndexMap<Vec<Part>, Value>) -> Result<Value, Error> {
@@ -875,6 +896,10 @@ fn ocdsmerge_rs<'py>(py: Python<'py>, m: &Bound<'py, PyModule>) -> PyResult<()> 
     m.add("MissingDateKeyError", py.get_type::<MissingDateKeyError>())?;
     m.add("NullDateValueError", py.get_type::<NullDateValueError>())?;
     m.add("NonStringDateValueError", py.get_type::<NonStringDateValueError>())?;
+    m.add(
+        "NonStringNonNumberIdValueError",
+        py.get_type::<NonStringNonNumberIdValueError>(),
+    )?;
     m.add("OutOfOrderReleaseError", py.get_type::<OutOfOrderReleaseError>())?;
     m.add("MergeWarning", py.get_type::<MergeWarning>())?;
     m.add("DuplicateIdValueWarning", py.get_type::<DuplicateIdValueWarning>())?;
@@ -942,14 +967,16 @@ mod tests {
             ]
         });
 
-        merger.flatten(
-            &mut flattened,
-            &mut Vec::new(),
-            &mut vec![],
-            false,
-            &item,
-            &mut warnings,
-        );
+        merger
+            .flatten(
+                &mut flattened,
+                &mut Vec::new(),
+                &mut vec![],
+                false,
+                &item,
+                &mut warnings,
+            )
+            .unwrap();
 
         assert_eq!(
             flattened,
@@ -985,14 +1012,16 @@ mod tests {
             ]
         });
 
-        merger.flatten(
-            &mut flattened,
-            &mut Vec::new(),
-            &mut vec![],
-            false,
-            &item,
-            &mut warnings,
-        );
+        merger
+            .flatten(
+                &mut flattened,
+                &mut Vec::new(),
+                &mut vec![],
+                false,
+                &item,
+                &mut warnings,
+            )
+            .unwrap();
 
         assert_eq!(
             flattened,
@@ -1233,6 +1262,55 @@ mod tests {
 
         assert_eq!(warnings, Vec::new());
         assert_eq!(result["number"].to_string(), "3.141592653589793238");
+    }
+
+    #[test]
+    fn id_object() {
+        let merger = Merger::default();
+
+        let data = vec![json!({
+            "ocid": "ocds-213czf-A",
+            "id": "1",
+            "date": "2000-01-01T00:00:00Z",
+            "parties": [{"id": {"an": "object"}}],
+        })];
+
+        assert!(matches!(
+            merger.create_compiled_release(&data),
+            Err(Error::NonStringNonNumberIdValue { path }) if path == "parties"
+        ));
+    }
+
+    #[test]
+    fn id_float() {
+        let merger = Merger::default();
+
+        let data = vec![json!({
+            "ocid": "ocds-213czf-A",
+            "id": "1",
+            "date": "2000-01-01T00:00:00Z",
+            "parties": [{"id": 1.5, "name": "Acme Inc."}],
+        })];
+
+        assert!(merger.create_compiled_release(&data).is_ok());
+    }
+
+    #[test]
+    fn id_null() {
+        let merger = Merger::default();
+
+        let data = vec![json!({
+            "ocid": "ocds-213czf-A",
+            "id": "1",
+            "date": "2000-01-01T00:00:00Z",
+            "parties": [{"id": null, "name": "Acme Inc."}],
+        })];
+
+        // A null value removes the field when merging, so the party is treated as having no `id`.
+        let (result, warnings) = merger.create_compiled_release(&data).unwrap();
+
+        assert_eq!(warnings, Vec::new());
+        assert_eq!(result["parties"], json!([{"name": "Acme Inc."}]));
     }
 
     include!(concat!(env!("OUT_DIR"), "/lib.include"));

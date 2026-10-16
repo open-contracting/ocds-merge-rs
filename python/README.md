@@ -15,23 +15,27 @@ schema = {
         "tender": {
             "type": "object",
             "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"}
-                        }
-                    }
-                }
-            }
+                "items": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}}}}
+            },
         }
     }
 }
 
 releases = [
-    {"ocid": "ocds-213czf-1", "id": "1", "date": "2020-01-01", "tag": ["tender"], "tender": {"id": "1", "title": "Original tender"}},
-    {"ocid": "ocds-213czf-1", "id": "2", "date": "2020-01-02", "tag": ["tenderUpdate"], "tender": {"id": "1", "title": "Updated tender"}},
+    {
+        "ocid": "ocds-213czf-1",
+        "id": "1",
+        "date": "2020-01-01",
+        "tag": ["tender"],
+        "tender": {"id": "1", "title": "Original tender"},
+    },
+    {
+        "ocid": "ocds-213czf-1",
+        "id": "2",
+        "date": "2020-01-02",
+        "tag": ["tenderUpdate"],
+        "tender": {"id": "1", "title": "Updated tender"},
+    },
 ]
 
 # Dereference the JSON Schema in-place.
@@ -58,8 +62,8 @@ from ocdsmerge_rs import Merger, Strategy
 merger = Merger(
     rules=rules,
     overrides={
-        ('awards',): Strategy.APPEND,
-        ('contracts', 'implementation', 'milestones'): Strategy.MERGE_BY_POSITION,
+        ("awards",): Strategy.APPEND,
+        ("contracts", "implementation", "milestones"): Strategy.MERGE_BY_POSITION,
     },
 )
 ```

@@ -2,7 +2,9 @@
 
 ## Unreleased
 
+- Add support for Python 3.15.
 - Drop support for Python 3.10.
+- Upgrade PyO3 and pythonize to 0.29.
 
 ## 0.1.6 (2026-06-30)
 

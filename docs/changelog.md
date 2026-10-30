@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.7 (2026-10-29)
 
 - Add support for Python 3.15.
 - Drop support for Python 3.10.

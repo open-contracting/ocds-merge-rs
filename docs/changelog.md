@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Drop support for Python 3.10.
+
 ## 0.1.6 (2026-06-30)
 
 - feat: Add `NonStringNonNumberIdValueError`, raised when an object in an array has an `id` value that is a boolean, array or object, instead of panicking. A null `id` is treated as a missing `id`. A number `id` that isn't an integer (a float or out-of-range integer) is used as a string for the purpose of matching objects across releases (the original value is preserved in the merged output).

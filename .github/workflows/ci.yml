@@ -29,11 +29,13 @@ jobs:
       - run: uv pip install .[dev,test]
       - if: matrix.os == 'windows-latest'
         name: Run tests
+        shell: bash
         run: |
           cargo test
           uv run pytest -W error
       - if: matrix.os != 'windows-latest'
         name: Run tests
+        shell: bash
         run: |
           eval $(cargo llvm-cov show-env --export-prefix)
           cargo test
